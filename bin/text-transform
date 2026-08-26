@@ -178,7 +178,12 @@ build_command() {
   USE_STDIN=1
   case "$agent" in
   claude)
-    CMD=(claude -p --output-format text
+    # --strict-mcp-config with no --mcp-config means no MCP servers get loaded.
+    # Measured on a normal setup that halves the time a transform takes, from
+    # ~5.8s to ~2.9s, because connecting to them is most of the startup. It
+    # also means none of their tools exist for this run, which a transform has
+    # no use for anyway.
+    CMD=(claude -p --output-format text --strict-mcp-config
       --disallowedTools "Bash,Edit,Write,Read,Glob,Grep,WebFetch,WebSearch,Task,NotebookEdit,TodoWrite")
     ;;
   codex)

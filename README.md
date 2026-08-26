@@ -6,9 +6,13 @@ The work is done by the coding agent you have already set up in Omarchy, through
 
 ## How it works
 
-Type or paste into the top box, choose a transformation, and press the arrow (or Ctrl+Enter). The answer lands in the bottom box with a button to copy it.
+Type or paste into the top box, choose a transformation, and press the arrow (or Ctrl+Enter). The answer lands in the bottom box and goes straight onto your clipboard, so you can paste it wherever you were heading. A notification says so.
 
-A transform takes a few seconds. You do not have to sit and watch it: close the panel and carry on, and the arrows in the bar stay lit while the agent works. When the answer lands you get a notification, the icon stays lit, and the text is waiting in the panel next time you open it. The notification says only that it finished — your text stays out of it.
+Three small buttons do the rest. The one in the input box pastes your clipboard in. In the output box, the up arrow sends the answer back to the top so you can run it through another transformation — shortening something twice is a different thing from asking for it very short once — and the other copies it again.
+
+A transform takes a few seconds. You do not have to sit and watch it: close the panel and carry on, and the arrows in the bar stay lit while the agent works. When the answer lands you get a notification and the text is waiting in the panel next time you open it. The notification says only that it finished and that it is on your clipboard — your text stays out of it, because notifications end up on lock screens.
+
+If it takes too long, the arrow becomes a stop button, and Ctrl+Enter does the same. Stopping kills the agent rather than just hiding the spinner: an agent left thinking is still spending your tokens.
 
 A transformation is just a name and a prompt. The name is what the dropdown shows; the prompt is what the agent is told to do with your text. Press the gear to edit them, add your own, or throw out the ones you never use.
 
@@ -28,7 +32,7 @@ Every agent Omarchy offers has a non-interactive mode, and this plugin drives ea
 
 | Agent | Runs as | Text goes in via |
 | --- | --- | --- |
-| Claude Code | `claude -p` | stdin |
+| Claude Code | `claude -p --strict-mcp-config` | stdin |
 | Codex | `codex exec --sandbox read-only` | stdin |
 | OpenCode | `opencode run --format json` | stdin |
 | Crush | `crush run -q` | stdin |
@@ -42,6 +46,8 @@ Every agent Omarchy offers has a non-interactive mode, and this plugin drives ea
 Grok, Antigravity and Copilot have no way to take a prompt on stdin, so with those three your text is briefly visible in the process list to other accounts on the machine. The other seven never put it there. If that matters on your machine, pick one of the seven.
 
 Ori is a launcher rather than an agent, so it needs Claude Code or Pi installed to have something to launch.
+
+Claude Code runs with `--strict-mcp-config`, which loads no MCP servers. Measured on a normal setup that takes a transform from around 5.8 to 2.9 seconds, because connecting to them is most of what the startup does. Forcing a small model is deliberately *not* done: Haiku measured slower than the default here, since at this length the time goes into starting up rather than generating.
 
 ## Your text and the agent
 

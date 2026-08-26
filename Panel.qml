@@ -35,6 +35,8 @@ Panel {
   readonly property string iconWand: "\uF0EC"
   readonly property string iconRun: "\uF063"
   readonly property string iconCopy: "\uF0C5"
+  readonly property string iconPaste: "\uF0EA"
+  readonly property string iconReuse: "\uF062"
   readonly property string iconSettings: "\uF013"
   readonly property string iconAdd: "\uF067"
   readonly property string iconRemove: "\uF1F8"
@@ -148,6 +150,37 @@ Panel {
     if (!busy) return
     cancelled = true
     runProc.signal(15)   // SIGTERM; the script traps it and takes the agent with it
+  }
+
+  function notify(title, body) {
+    notifyProc.command = ["notify-send", "--app-name=Text Transform",
+                          "--icon=accessories-text-editor", "--", title, body]
+    notifyProc.running = true
+  }
+
+  // Pull the clipboard into the input box. Ctrl+V does this too, but the
+  // panel opens with the mouse as often as not, and the button is where
+  // someone looks for it.
+  function pasteInput() {
+    if (!pasteProc.running) pasteProc.running = true
+  }
+
+  // Send the answer back up to the input, so it can be run through another
+  // transformation — or the same one again. Shortening something twice is a
+  // different thing from asking for it very short once.
+  //
+  // The output box is emptied on the way: the same text sitting in both boxes
+  // reads as a transform that did nothing.
+  function reuseOutput() {
+    if (outputText === "") return
+    var text = outputText
+    inputText = text
+    inputField.text = text
+    outputText = ""
+    errorText = ""
+    copied = false
+    inputField.forceActiveFocus()
+    inputField.cursorPosition = text.length
   }
 
   function copyOutput() {
@@ -285,24 +318,29 @@ Panel {
         if (payload && payload.ok === true) {
           root.outputText = String(payload.output || "")
           root.errorText = ""
+
+          // Straight onto the clipboard. Transforming text is a step on the
+          // way to pasting it somewhere else, so making that a second click
+          // only adds a click. The copy button stays for a second helping.
+          root.copyOutput()
+
+          // Said out loud even with the panel open, because the clipboard is
+          // the part you cannot see. The text itself stays out of it: a
+          // notification can end up on a lock screen.
+          root.notify("Text Transform", "Transformed and copied to your clipboard")
         } else {
           root.errorText = String((payload && payload.error) || "Something went wrong")
+
+          // A failure with the panel open is already on screen in red, so
+          // only tell the people who walked away.
+          if (!root.opened) {
+            root.notify("Text Transform failed", "Open the panel to see what went wrong.")
+          }
         }
 
         // The run outlives the panel on purpose, so a result can arrive with
-        // nobody looking. Say so, without putting the text in a notification
-        // that lands on a lock screen.
-        if (!root.opened) {
-          root.resultWaiting = true
-          notifyProc.command = ["notify-send", "--app-name=Text Transform",
-                                "--icon=accessories-text-editor", "--",
-                                payload && payload.ok === true
-                                  ? "Text Transform" : "Text Transform failed",
-                                payload && payload.ok === true
-                                  ? "Your text is ready in the panel."
-                                  : "Open the panel to see what went wrong."]
-          notifyProc.running = true
-        }
+        // nobody looking, and the bar has to keep saying so until it is seen.
+        if (!root.opened) root.resultWaiting = true
       }
     }
     onExited: {
@@ -322,6 +360,20 @@ Panel {
       stdinEnabled = false
     }
     onExited: root.loadTransformations()
+  }
+
+  Process {
+    id: pasteProc
+    command: ["wl-paste", "--no-newline"]
+    stdout: StdioCollector {
+      onStreamFinished: {
+        if (text === "") return
+        root.inputText = text
+        inputField.text = text
+        inputField.cursorPosition = text.length
+        inputField.forceActiveFocus()
+      }
+    }
   }
 
   // wl-copy takes the text on stdin for the same reason the script does.
@@ -494,6 +546,7 @@ Panel {
           ScrollView {
             anchors.fill: parent
             anchors.margins: Style.space(6)
+            anchors.bottomMargin: Style.space(30)
             clip: true
 
             TextArea {
@@ -530,6 +583,19 @@ Panel {
                 }
               }
             }
+          }
+
+          PanelActionButton {
+            anchors.right: parent.right
+            anchors.rightMargin: Style.space(4)
+            anchors.bottom: parent.bottom
+            anchors.bottomMargin: Style.space(4)
+            focusable: true
+            iconText: root.iconPaste
+            tooltipText: "Paste from clipboard"
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            onClicked: root.pasteInput()
           }
         }
 
@@ -695,6 +761,7 @@ Panel {
           }
 
           PanelActionButton {
+            id: copyButton
             anchors.right: parent.right
             anchors.rightMargin: Style.space(4)
             anchors.bottom: parent.bottom
@@ -706,6 +773,20 @@ Panel {
             foreground: root.copied ? root.accent : root.foreground
             fontFamily: root.fontFamily
             onClicked: root.copyOutput()
+          }
+
+          PanelActionButton {
+            anchors.right: copyButton.left
+            anchors.rightMargin: Style.space(2)
+            anchors.bottom: parent.bottom
+            anchors.bottomMargin: Style.space(4)
+            focusable: true
+            enabled: root.outputText !== "" && !root.busy
+            iconText: root.iconReuse
+            tooltipText: "Send back up to transform again"
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            onClicked: root.reuseOutput()
           }
         }
 
