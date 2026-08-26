@@ -39,6 +39,7 @@ Panel {
   readonly property string iconAdd: "\uF067"
   readonly property string iconRemove: "\uF1F8"
   readonly property string iconDone: "\uF00C"
+  readonly property string iconStop: "\uF04D"
 
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color accent: Color.accent
@@ -54,6 +55,9 @@ Panel {
   property bool copied: false
   // A result that landed while the panel was closed, so the bar can say so.
   property bool resultWaiting: false
+  // Set while a stop is on its way, so the empty answer that follows is read
+  // as "you stopped it" rather than as a failure worth reporting.
+  property bool cancelled: false
 
   // Which agent is going to do the work, so the panel can name it and say so
   // when there is nothing to do the work with.
@@ -131,12 +135,19 @@ Panel {
     errorText = ""
     outputText = ""
     copied = false
+    cancelled = false
     busy = true
     runProc.request = JSON.stringify({
       text: inputText,
       prompt: String(currentTransformation.prompt)
     })
     runProc.running = true
+  }
+
+  function cancelTransform() {
+    if (!busy) return
+    cancelled = true
+    runProc.signal(15)   // SIGTERM; the script traps it and takes the agent with it
   }
 
   function copyOutput() {
@@ -260,6 +271,10 @@ Panel {
     stdout: StdioCollector {
       onStreamFinished: {
         root.busy = false
+        if (root.cancelled) {
+          root.cancelled = false
+          return
+        }
         var payload
         try {
           payload = JSON.parse(text)
@@ -290,7 +305,10 @@ Panel {
         }
       }
     }
-    onExited: root.busy = false
+    onExited: {
+      root.busy = false
+      root.cancelled = false
+    }
   }
 
   Process {
@@ -496,7 +514,10 @@ Panel {
               Keys.onPressed: function(event) {
                 if ((event.key === Qt.Key_Return || event.key === Qt.Key_Enter)
                     && (event.modifiers & Qt.ControlModifier)) {
-                  root.runTransform()
+                  // The same keystroke that started it stops it, so a run that
+                  // hangs needs no reaching for the mouse.
+                  if (root.busy) root.cancelTransform()
+                  else root.runTransform()
                   event.accepted = true
                 } else if (event.key === Qt.Key_Escape) {
                   root.close()
@@ -532,19 +553,24 @@ Panel {
             onChanged: function(value) { root.selectedIndex = parseInt(value) }
           }
 
+          // While it runs, the same button stops it. An agent left thinking
+          // after you have given up is still spending your tokens, so this
+          // kills the script and the agent under it rather than only hiding
+          // the spinner.
           PanelActionButton {
             id: runButton
             anchors.right: parent.right
             anchors.verticalCenter: parent.verticalCenter
             focusable: true
-            enabled: root.canRun
+            enabled: root.busy || root.canRun
             size: Style.spacing.controlHeight
-            iconText: root.iconRun
-            tooltipText: root.busy ? "Working" : "Transform (Ctrl+Enter)"
-            foreground: root.busy ? root.accent : root.foreground
+            iconText: root.busy ? root.iconStop : root.iconRun
+            tooltipText: root.busy ? "Stop" : "Transform (Ctrl+Enter)"
+            foreground: root.foreground
+            hoverColor: root.busy ? Color.urgent : root.foreground
             fontFamily: root.fontFamily
             bordered: true
-            onClicked: root.runTransform()
+            onClicked: root.busy ? root.cancelTransform() : root.runTransform()
           }
         }
 
@@ -648,7 +674,7 @@ Panel {
             Text {
               anchors.horizontalCenter: parent.horizontalCenter
               textFormat: Text.PlainText
-              text: "You can close this and carry on"
+              text: "Close this and carry on, or stop it with Ctrl+Enter"
               color: Qt.darker(root.foreground, 1.8)
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption

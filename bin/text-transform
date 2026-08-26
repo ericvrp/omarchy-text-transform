@@ -383,14 +383,30 @@ run_transform() {
     die "Default agent $agent has no non-interactive mode this plugin knows"
   }
 
+  # Run it as a background job and wait, rather than in a command
+  # substitution, so there is a pid to signal: the panel's stop button kills
+  # this script, and a script that dies mid-substitution leaves the agent
+  # running and billing. `exec` replaces the subshell with timeout, which
+  # makes $! the timeout process itself, and GNU timeout passes the signal on
+  # to the agent under it.
+  local outcap="$workdir/stdout.txt" agent_pid
   if [[ "$USE_STDIN" == "1" ]]; then
-    stdout="$(printf '%s' "$prompt" |
-      (cd "$workdir" && timeout -k 5 "$TIMEOUT_SECONDS" "${CMD[@]}" 2>"$errfile"))"
+    printf '%s' "$prompt" |
+      (cd "$workdir" && exec timeout -k 5 "$TIMEOUT_SECONDS" "${CMD[@]}") \
+      >"$outcap" 2>"$errfile" &
   else
-    stdout="$(cd "$workdir" &&
-      timeout -k 5 "$TIMEOUT_SECONDS" "${CMD[@]}" </dev/null 2>"$errfile")"
+    (cd "$workdir" && exec timeout -k 5 "$TIMEOUT_SECONDS" "${CMD[@]}" </dev/null) \
+      >"$outcap" 2>"$errfile" &
   fi
+  agent_pid=$!
+
+  # shellcheck disable=SC2064  # the pid is wanted now, not when the trap fires
+  trap "kill -TERM $agent_pid 2>/dev/null; rm -rf -- '$workdir'; exit 143" TERM INT
+  wait "$agent_pid"
   status=$?
+  trap - TERM INT
+
+  stdout="$(cat -- "$outcap" 2>/dev/null)"
   stderr="$(cat -- "$errfile" 2>/dev/null)"
 
   if [[ "$status" == "124" || "$status" == "137" ]]; then
