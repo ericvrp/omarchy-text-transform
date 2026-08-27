@@ -143,6 +143,9 @@ Panel {
       text: inputText,
       prompt: String(currentTransformation.prompt)
     })
+    // onStarted closes stdin to signal end of input, and that sticks: without
+    // this the second run has no stdin and the script waits forever on it.
+    runProc.stdinEnabled = true
     runProc.running = true
   }
 
@@ -186,6 +189,7 @@ Panel {
   function copyOutput() {
     if (outputText === "") return
     copyProc.payload = outputText
+    copyProc.stdinEnabled = true
     copyProc.running = true
     copied = true
     copiedTimer.restart()
@@ -230,6 +234,7 @@ Panel {
       list.push({ name: String(item.name), prompt: String(item.prompt) })
     }
     saveProc.request = JSON.stringify({ transformations: list })
+    saveProc.stdinEnabled = true
     saveProc.running = true
   }
 
