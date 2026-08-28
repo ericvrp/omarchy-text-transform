@@ -1,6 +1,8 @@
 # Text Transform
 
-Paste text, pick a transformation, get the result back. Fix the grammar, make it shorter, translate it, rewrite it for work email — whatever you have written a prompt for.
+Paste text, pick a transformation, get the result back. Fix the grammar, make it shorter, translate it, rewrite it for work email, or anything else you have written a prompt for.
+
+![The panel, with a line of English turned into Dutch](screenshots/panel.png)
 
 The work is done by the coding agent you have already set up in Omarchy, through `omarchy default agent`. There is no API key to enter, no model to pick and no account to make: if `omarchy agent` starts something on your machine, this widget uses it.
 
@@ -8,21 +10,23 @@ The work is done by the coding agent you have already set up in Omarchy, through
 
 Type or paste into the top box, choose a transformation, and press the arrow (or Ctrl+Enter). The answer lands in the bottom box and goes straight onto your clipboard, so you can paste it wherever you were heading. A notification says so.
 
-Three small buttons do the rest. The one in the input box pastes your clipboard in. In the output box, the up arrow sends the answer back to the top so you can run it through another transformation — shortening something twice is a different thing from asking for it very short once — and the other copies it again.
+Three small buttons do the rest. The one in the input box pastes your clipboard in. In the output box, the up arrow sends the answer back to the top so you can run it through another transformation (shortening something twice is a different thing from asking for it very short once), and the other copies it again.
 
-A transform takes a few seconds. You do not have to sit and watch it: close the panel and carry on, and the arrows in the bar stay lit while the agent works. When the answer lands you get a notification and the text is waiting in the panel next time you open it. The notification says only that it finished and that it is on your clipboard — your text stays out of it, because notifications end up on lock screens.
+A transform takes a few seconds. You do not have to sit and watch it: close the panel and carry on, and the arrows in the bar stay lit while the agent works. When the answer lands you get a notification and the text is waiting in the panel next time you open it. The notification says only that it finished and that it is on your clipboard; your text stays out of it, because notifications end up on lock screens.
 
 If it takes too long, the arrow becomes a stop button, and Ctrl+Enter does the same. Stopping kills the agent rather than just hiding the spinner: an agent left thinking is still spending your tokens.
 
+Nothing here needs the mouse. The panel opens with the cursor in the input box; Tab walks both boxes, the dropdown and every button, Enter or space presses whatever is focused, Ctrl+Enter transforms or stops from anywhere, and Escape closes. Bind the panel to a key (see *Installing*) and the whole thing is a keyboard away.
+
 A transformation is just a name and a prompt. The name is what the dropdown shows; the prompt is what the agent is told to do with your text. Press the gear to edit them, add your own, or throw out the ones you never use.
 
-Six come with it: fix grammar, make it shorter, make it longer, translate to English, make it professional, explain simply. They are a starting point, not the point — the plugin is worth having because you can write "rewrite this as a commit message" or "turn this into Dutch that does not read like a translation" and have it a keypress away.
+Three come with it: fix typos, make it shorter, translate to Dutch. That is deliberately not a set of everything you might want; the plugin is worth having because you write the ones you need yourself. "Rewrite this as a commit message", "turn this into English that does not read like a translation", "say this the way I would say it": each of those is a name and a prompt, and then it is a keypress away.
 
 ## Requirements
 
 - Omarchy Quattro (4.x)
 - A default agent: `omarchy default agent claude` (or `codex`, `opencode`, `crush`, `pi`, `omp`, `grok`, `agy`, `copilot`, `ori`)
-- `jq`, and `wl-copy` for the copy button — both standard on Omarchy
+- `jq`, and `wl-copy` for the copy button (both standard on Omarchy)
 
 If no default agent is set, the panel says so instead of failing quietly.
 
@@ -51,7 +55,7 @@ Claude Code runs with `--strict-mcp-config`, which loads no MCP servers. Measure
 
 ## Your text and the agent
 
-The text is handed to the agent as one prompt, and the agent is told to treat everything between the markers as text rather than as instructions. That is not a guarantee — a language model can be talked into things — so the plugin narrows what an agent could do if it were:
+The text is handed to the agent as one prompt, and the agent is told to treat everything between the markers as text rather than as instructions. That is not a guarantee, because a language model can be talked into things, so the plugin narrows what an agent could do if it were:
 
 - Every run happens in a fresh empty directory, so there is no project for the agent to read or write.
 - Tools are switched off wherever the agent supports it (`--no-tools`, `--disallowedTools`, `--sandbox read-only`).
@@ -79,7 +83,7 @@ o.bind("SUPER + T", "Text Transform", "omarchy-shell shell toggle jankeesvw.text
 omarchy plugin remove jankeesvw.text-transform
 ```
 
-That leaves one thing behind: the transformations you wrote, in `~/.config/omarchy-text-transform/transformations.json` (the directory is mode 700, the file 600, and only your account can read them). Nothing else is stored — the text you transform and the answers you get are never written to disk by this plugin. To delete the prompts too:
+That leaves one thing behind: the transformations you wrote, in `~/.config/omarchy-text-transform/transformations.json` (the directory is mode 700, the file 600, and only your account can read them). Nothing else is stored; the text you transform and the answers you get are never written to disk by this plugin. To delete the prompts too:
 
 ```bash
 rm -rf ~/.config/omarchy-text-transform

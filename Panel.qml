@@ -16,8 +16,14 @@ import qs.Ui
 // open/close lifecycle, a BarIconButton for the bar, and a KeyboardPanel for
 // the popup. KeyboardPanel matters specifically because PopupCard is a
 // PopupWindow, which never receives keyboard focus on Wayland, so a text field
-// inside one can be clicked but not typed into — and this panel is two text
+// inside one can be clicked but not typed into, and this panel is two text
 // fields and little else.
+//
+// Everything in the panel is reachable and operable without a mouse: Tab walks
+// a ring over the two text boxes, the dropdown and every button, Enter or space
+// presses whatever is focused, Ctrl+Enter runs or stops a transform from
+// anywhere, and Escape closes. That rules out PanelKeyCatcher here; see the
+// comment on the key catcher below for why a form needs the other pattern.
 //
 // Glyphs are \u escapes rather than literal characters, so the source survives
 // editors and patches that mangle private-use codepoints.
@@ -42,6 +48,9 @@ Panel {
   readonly property string iconRemove: "\uF1F8"
   readonly property string iconDone: "\uF00C"
   readonly property string iconStop: "\uF04D"
+  // The same chevron every other dropdown in the shell draws. Past U+FFFF, so
+  // it is written as the surrogate pair rather than as the character itself.
+  readonly property string iconChevron: "\udb80\udd40"
 
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color accent: Color.accent
@@ -80,16 +89,6 @@ Panel {
   readonly property bool canRun:
     agentReady && !busy && currentTransformation !== null
     && inputText.trim().length > 0
-
-  // Options in the shape Dropdown wants: the index is the value, so two
-  // transformations that happen to share a name still select apart.
-  readonly property var dropdownOptions: {
-    var out = []
-    for (var i = 0; i < transformations.length; i++) {
-      out.push({ value: String(i), label: String(transformations[i].name) })
-    }
-    return out
-  }
 
   // Panel is a bare Item, so it has no size of its own and the bar would give
   // the widget zero width. Set it here, never from a child that fills this
@@ -169,7 +168,7 @@ Panel {
   }
 
   // Send the answer back up to the input, so it can be run through another
-  // transformation — or the same one again. Shortening something twice is a
+  // transformation, or the same one again. Shortening something twice is a
   // different thing from asking for it very short once.
   //
   // The output box is emptied on the way: the same text sitting in both boxes
@@ -209,6 +208,11 @@ Panel {
                      prompt: String(transformations[i].prompt) })
     }
     settingsOpen = true
+
+    // The main view is about to go invisible, and an item that loses its
+    // visibility loses the focus with it, leaving the keyboard pointed at
+    // nothing. Hand it to the button that is on screen in both views.
+    settingsButton.forceActiveFocus()
   }
 
   function updateDraft(index, field, value) {
@@ -217,8 +221,39 @@ Panel {
     draft.setProperty(index, field, String(value))
   }
 
+  // Drag the settings window to whatever just took the keyboard. Tabbing to a
+  // field below the fold otherwise types into something you cannot see, which
+  // reads as the panel having stopped responding.
+  //
+  // `y` and `h` are inside `item`, so the same call covers both a whole field
+  // and the one line of it the cursor is on.
+  function revealInDrafts(item, y, h) {
+    if (!item || !draftFlick.visible || draftFlick.contentHeight <= draftFlick.height) return
+    var margin = Style.space(8)
+    var top = item.mapToItem(draftColumn, 0, y).y - margin
+    var bottom = top + h + margin * 2
+    if (top < draftFlick.contentY) {
+      draftFlick.contentY = Math.max(0, top)
+    } else if (bottom > draftFlick.contentY + draftFlick.height) {
+      draftFlick.contentY = Math.max(0, Math.min(bottom - draftFlick.height,
+                                                 draftFlick.contentHeight - draftFlick.height))
+    }
+  }
+
   function addDraft() {
     draft.append({ name: "New transformation", prompt: "" })
+
+    // The row does not exist yet: appending to the model builds the delegate
+    // after this returns. So scrolling to it and naming it have to wait a
+    // turn, or they land on the row that used to be last.
+    Qt.callLater(function() {
+      draftFlick.contentY = Math.max(0, draftFlick.contentHeight - draftFlick.height)
+      var row = draftRepeater.itemAt(draft.count - 1)
+      if (row && row.nameField) {
+        row.nameField.forceActiveFocus()
+        row.nameField.selectAll()
+      }
+    })
   }
 
   function removeDraft(index) {
@@ -228,6 +263,7 @@ Panel {
 
   function saveSettings() {
     settingsOpen = false
+    inputField.forceActiveFocus()
     var list = []
     for (var i = 0; i < draft.count; i++) {
       var item = draft.get(i)
@@ -243,7 +279,7 @@ Panel {
   // and `omarchy-shell shell hide` all doing nothing but tidying up.
   //
   // Whatever is running keeps running. A transform takes seconds and there is
-  // no reason to sit and watch it — the bar shows it is working and says so
+  // no reason to sit and watch it; the bar shows it is working and says so
   // again when the answer lands.
   function close() {
     // Leaving settings half-edited would lose the edits silently, so closing
@@ -476,14 +512,36 @@ Panel {
                            panel.availableCardWidth > 0 ? panel.availableCardWidth : desiredWidth)
     contentHeight: panel.fittedContentHeight(content.implicitHeight, Style.space(760))
 
-    PanelKeyCatcher {
+    // A plain Item rather than PanelKeyCatcher. That component reads keys
+    // before its descendants and turns Tab, Enter and Space into signals of
+    // its own, which is right for a panel that is a list of rows and wrong for
+    // one that is a form: every button here could be reached with Tab and none
+    // of them could be pressed, because the catcher ate the Enter first.
+    //
+    // An ancestor Item only sees the keys the focused control did not want, so
+    // Tab walks the controls the way Qt already knows how to, Enter presses
+    // whatever is focused, and this handler keeps just the two keys that have
+    // to work from anywhere in the panel.
+    Item {
       id: keyCatcher
       anchors.fill: parent
-      // While a field or the dropdown owns the keys, the panel's own shortcuts
-      // stay out of the way, or typing would drive them.
-      blocked: inputField.activeFocus || outputField.activeFocus
-               || dropdown.popupOpen || root.settingsOpen
-      onCloseRequested: root.close()
+      focus: true
+
+      Keys.onPressed: function(event) {
+        if (event.key === Qt.Key_Escape) {
+          root.close()
+          event.accepted = true
+        } else if ((event.key === Qt.Key_Return || event.key === Qt.Key_Enter)
+                   && (event.modifiers & Qt.ControlModifier)) {
+          // The same keystroke that started it stops it, so a run that hangs
+          // needs no reaching for the mouse. In settings it commits instead:
+          // there is nothing to transform while the list is being edited.
+          if (root.settingsOpen) root.saveSettings()
+          else if (root.busy) root.cancelTransform()
+          else root.runTransform()
+          event.accepted = true
+        }
+      }
 
       Column {
         id: content
@@ -569,23 +627,20 @@ Panel {
               placeholderTextColor: Qt.darker(root.foreground, 1.6)
               background: null
 
+              // Without this a TextArea is not a stop on the Tab ring at all.
+              // You could tab out of it and never tab back in, which is a
+              // dead end in the one control the panel opens on.
+              activeFocusOnTab: true
+
               Keys.onPressed: function(event) {
-                if ((event.key === Qt.Key_Return || event.key === Qt.Key_Enter)
-                    && (event.modifiers & Qt.ControlModifier)) {
-                  // The same keystroke that started it stops it, so a run that
-                  // hangs needs no reaching for the mouse.
-                  if (root.busy) root.cancelTransform()
-                  else root.runTransform()
-                  event.accepted = true
-                } else if (event.key === Qt.Key_Escape) {
-                  root.close()
-                  event.accepted = true
-                } else if (event.key === Qt.Key_Tab || event.key === Qt.Key_Backtab) {
+                if (event.key === Qt.Key_Tab || event.key === Qt.Key_Backtab) {
                   // A TextArea would otherwise insert a literal tab, and this
                   // is a form: Tab has to walk to the next control.
                   inputField.nextItemInFocusChain(event.key === Qt.Key_Tab).forceActiveFocus()
                   event.accepted = true
                 }
+                // Ctrl+Enter and Escape fall through to the key catcher, so
+                // they mean the same thing here as anywhere else in the panel.
               }
             }
           }
@@ -611,17 +666,195 @@ Panel {
           width: parent.width
           height: Math.max(dropdown.height, runButton.height)
 
-          Dropdown {
+          // The shared Dropdown, with the arithmetic that decides how tall the
+          // open list is put right. That component measures the rows and
+          // forgets the frame around them, so the last transformation you
+          // wrote is sliced off along the bottom edge, and it stops growing at
+          // eight rows however many you have written. Everything else here is
+          // the same component: same chrome, same keys.
+          Item {
             id: dropdown
             anchors.left: parent.left
             anchors.right: runButton.left
             anchors.rightMargin: Style.space(8)
             anchors.verticalCenter: parent.verticalCenter
-            showLabel: false
-            options: root.dropdownOptions
-            value: String(root.selectedIndex)
-            fontFamily: root.fontFamily
-            onChanged: function(value) { root.selectedIndex = parseInt(value) }
+            height: Style.spacing.controlHeight
+
+            // Past this it scrolls. Ten is about as far down a panel as a list
+            // can hang before it stops looking like it belongs to the box it
+            // came out of.
+            readonly property int maxVisibleRows: 10
+
+            // root.close() calls this: closing the panel with the list hanging
+            // open would leave the list on screen with nothing behind it.
+            function close() { picker.close() }
+
+            BorderSurface {
+              id: trigger
+              anchors.fill: parent
+              radius: Style.cornerRadius
+              activeFocusOnTab: true
+
+              readonly property bool hot: triggerHover.hovered
+              color: Style.controlFill(trigger.activeFocus, trigger.hot, root.foreground, root.accent)
+              borderSpec: Border.controlSpec(
+                trigger.activeFocus ? "focus" : (trigger.hot ? "hover-cursor" : "normal"),
+                root.foreground, root.accent)
+
+              HoverHandler { id: triggerHover }
+
+              Keys.onPressed: function(event) {
+                if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter
+                    || event.key === Qt.Key_Space || event.key === Qt.Key_Down) {
+                  picker.opened ? picker.close() : picker.open()
+                  event.accepted = true
+                }
+              }
+
+              Text {
+                anchors.left: parent.left
+                anchors.right: chevron.left
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.leftMargin: trigger.borderLeft + Style.spacing.controlPaddingX
+                anchors.rightMargin: Style.spacing.md
+                textFormat: Text.PlainText
+                text: root.currentTransformation ? String(root.currentTransformation.name) : ""
+                color: root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.body
+                elide: Text.ElideRight
+              }
+
+              Text {
+                id: chevron
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.rightMargin: trigger.borderRight + Style.spacing.controlGap
+                textFormat: Text.PlainText
+                text: root.iconChevron
+                color: Qt.darker(root.foreground, 1.2)
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.body
+              }
+
+              MouseArea {
+                anchors.fill: parent
+                cursorShape: Qt.PointingHandCursor
+                onClicked: {
+                  trigger.forceActiveFocus()
+                  picker.opened ? picker.close() : picker.open()
+                }
+              }
+
+              Popup {
+                id: picker
+                x: 0
+                y: trigger.height + Style.spacing.xxs
+                width: trigger.width
+                focus: true
+
+                readonly property var spec: Border.localOrSurfaceSpec(
+                  "popups", "border", Color.popups.border, Color.popups.border, Style.normalBorderWidth)
+
+                padding: Style.spacing.hairline
+                leftPadding: Border.left(picker.spec) + Style.spacing.hairline
+                rightPadding: Border.right(picker.spec) + Style.spacing.hairline
+                topPadding: Border.top(picker.spec) + Style.spacing.hairline
+                bottomPadding: Border.bottom(picker.spec) + Style.spacing.hairline
+
+                // The whole repair: the rows, and then the frame they sit in.
+                implicitHeight: optionList.implicitHeight + topPadding + bottomPadding
+
+                background: BorderSurface {
+                  color: Color.popups.background
+                  borderSpec: picker.spec
+                  radius: Style.cornerRadius
+                }
+
+                onOpened: {
+                  optionList.currentIndex = root.selectedIndex
+                  optionList.positionViewAtIndex(optionList.currentIndex, ListView.Contain)
+                  optionList.forceActiveFocus()
+                }
+                // Nothing hands the focus back on its own, and the Tab ring is
+                // broken until something does.
+                onClosed: trigger.forceActiveFocus()
+
+                contentItem: ListView {
+                  id: optionList
+
+                  readonly property int rowHeight: Style.spacing.popupRowHeight
+
+                  spacing: Style.spacing.labelGap
+                  clip: true
+                  boundsBehavior: Flickable.StopAtBounds
+                  model: root.transformations
+                  currentIndex: -1
+                  implicitHeight: Math.min(contentHeight,
+                                           dropdown.maxVisibleRows * (rowHeight + spacing) - spacing)
+                  ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+
+                  function choose(i) {
+                    if (i < 0 || i >= root.transformations.length) return
+                    root.selectedIndex = i
+                    picker.close()
+                  }
+
+                  Keys.priority: Keys.BeforeItem
+                  Keys.onPressed: function(event) {
+                    if (event.key === Qt.Key_Escape) {
+                      picker.close(); event.accepted = true
+                    } else if (event.key === Qt.Key_Down || event.text === "j") {
+                      optionList.currentIndex = Math.min(optionList.count - 1, optionList.currentIndex + 1)
+                      event.accepted = true
+                    } else if (event.key === Qt.Key_Up || event.text === "k") {
+                      optionList.currentIndex = Math.max(0, optionList.currentIndex - 1)
+                      event.accepted = true
+                    } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter
+                               || event.key === Qt.Key_Space) {
+                      optionList.choose(optionList.currentIndex); event.accepted = true
+                    }
+                  }
+
+                  delegate: Rectangle {
+                    id: optionRow
+                    required property var modelData
+                    required property int index
+
+                    width: optionList.width
+                    height: optionList.rowHeight
+                    radius: Style.cornerRadius
+                    color: optionRow.index === optionList.currentIndex
+                      ? Style.hoverFillFor(root.foreground, root.accent)
+                      : "transparent"
+
+                    Text {
+                      anchors.left: parent.left
+                      anchors.right: parent.right
+                      anchors.verticalCenter: parent.verticalCenter
+                      anchors.leftMargin: Style.spacing.controlPaddingX
+                      anchors.rightMargin: Style.spacing.controlPaddingX
+                      textFormat: Text.PlainText
+                      text: String(optionRow.modelData.name)
+                      color: optionRow.index === optionList.currentIndex
+                        ? Style.hoverStateColor(root.foreground, root.accent)
+                        : root.foreground
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.body
+                      elide: Text.ElideRight
+                    }
+
+                    MouseArea {
+                      anchors.fill: parent
+                      hoverEnabled: true
+                      cursorShape: Qt.PointingHandCursor
+                      onPositionChanged: optionList.currentIndex = optionRow.index
+                      onClicked: optionList.choose(optionRow.index)
+                    }
+                  }
+                }
+              }
+            }
           }
 
           // While it runs, the same button stops it. An agent left thinking
@@ -630,18 +863,38 @@ Panel {
           // the spinner.
           PanelActionButton {
             id: runButton
+
+            // Whether there is anything to press it for. Not wired to
+            // `enabled`, which is what it looks like it wants: Qt steps over
+            // disabled items in the focus ring, and this is the one button the
+            // whole panel is about. Dropping it out of the ring until you have
+            // typed something means the ring changes shape as you type, and
+            // the only way to find that out is to tab past where it should be.
+            //
+            // So it stays reachable and says with its colour that there is
+            // nothing to run yet. Pressing it then does the one useful thing
+            // left: put the cursor where the text has to go.
+            readonly property bool armed: root.busy || root.canRun
+
             anchors.right: parent.right
             anchors.verticalCenter: parent.verticalCenter
             focusable: true
-            enabled: root.busy || root.canRun
             size: Style.spacing.controlHeight
             iconText: root.busy ? root.iconStop : root.iconRun
-            tooltipText: root.busy ? "Stop" : "Transform (Ctrl+Enter)"
-            foreground: root.foreground
-            hoverColor: root.busy ? Color.urgent : root.foreground
+            tooltipText: root.busy
+              ? "Stop"
+              : (root.canRun ? "Transform (Ctrl+Enter)" : "Nothing to transform yet")
+            foreground: armed ? root.foreground : Qt.darker(root.foreground, 2.0)
+            hoverColor: root.busy
+              ? Color.urgent
+              : (armed ? root.foreground : Qt.darker(root.foreground, 2.0))
             fontFamily: root.fontFamily
             bordered: true
-            onClicked: root.busy ? root.cancelTransform() : root.runTransform()
+            onClicked: {
+              if (root.busy) root.cancelTransform()
+              else if (root.canRun) root.runTransform()
+              else inputField.forceActiveFocus()
+            }
           }
         }
 
@@ -682,9 +935,13 @@ Panel {
               placeholderTextColor: Qt.darker(root.foreground, 1.6)
               background: null
 
+              // Read-only, but still a stop on the ring: it is the only way to
+              // reach the answer with the keyboard and select part of it.
+              activeFocusOnTab: true
+
               Keys.onPressed: function(event) {
-                if (event.key === Qt.Key_Escape) {
-                  root.close()
+                if (event.key === Qt.Key_Tab || event.key === Qt.Key_Backtab) {
+                  outputField.nextItemInFocusChain(event.key === Qt.Key_Tab).forceActiveFocus()
                   event.accepted = true
                 }
               }
@@ -765,6 +1022,24 @@ Panel {
             font.pixelSize: Style.font.caption
           }
 
+          // Declared left to right, because Tab follows the order the
+          // children are written in and a ring that jumps backwards over the
+          // pair is one you have to look at to use.
+          PanelActionButton {
+            id: reuseButton
+            anchors.right: copyButton.left
+            anchors.rightMargin: Style.space(2)
+            anchors.bottom: parent.bottom
+            anchors.bottomMargin: Style.space(4)
+            focusable: true
+            enabled: root.outputText !== "" && !root.busy
+            iconText: root.iconReuse
+            tooltipText: "Send back up to transform again"
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            onClicked: root.reuseOutput()
+          }
+
           PanelActionButton {
             id: copyButton
             anchors.right: parent.right
@@ -778,20 +1053,6 @@ Panel {
             foreground: root.copied ? root.accent : root.foreground
             fontFamily: root.fontFamily
             onClicked: root.copyOutput()
-          }
-
-          PanelActionButton {
-            anchors.right: copyButton.left
-            anchors.rightMargin: Style.space(2)
-            anchors.bottom: parent.bottom
-            anchors.bottomMargin: Style.space(4)
-            focusable: true
-            enabled: root.outputText !== "" && !root.busy
-            iconText: root.iconReuse
-            tooltipText: "Send back up to transform again"
-            foreground: root.foreground
-            fontFamily: root.fontFamily
-            onClicked: root.reuseOutput()
           }
         }
 
@@ -822,17 +1083,31 @@ Panel {
           wrapMode: Text.Wrap
         }
 
-        ScrollView {
+        // One scrolling surface, not two. Every prompt used to sit in a fixed
+        // 64px box with a ScrollView of its own, which meant a long prompt was
+        // read three lines at a time and the wheel over it scrolled that
+        // keyhole instead of the list. The boxes now grow to whatever they
+        // hold and only this flickable scrolls.
+        Flickable {
+          id: draftFlick
           visible: root.settingsOpen
           width: parent.width
-          height: Style.space(360)
+          height: Math.min(draftColumn.implicitHeight, Style.space(500))
           clip: true
+          contentWidth: width
+          contentHeight: draftColumn.implicitHeight
+          boundsBehavior: Flickable.StopAtBounds
+          flickableDirection: Flickable.VerticalFlick
+          interactive: contentHeight > height
+          ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
 
           Column {
-            width: parent.width
+            id: draftColumn
+            width: draftFlick.width
             spacing: Style.space(8)
 
             Repeater {
+              id: draftRepeater
               model: draft
 
               delegate: Rectangle {
@@ -840,6 +1115,9 @@ Panel {
                 required property int index
                 required property string name
                 required property string prompt
+
+                // So addDraft can put the cursor in the row it just made.
+                property alias nameField: nameField
 
                 width: parent.width
                 height: rowContent.implicitHeight + Style.space(12)
@@ -870,7 +1148,14 @@ Panel {
                       placeholderText: "Name"
                       font.family: root.fontFamily
                       font.pixelSize: Style.font.body
+                      // The shared TextField does not opt into the Tab ring
+                      // itself, so without this the name of every
+                      // transformation is unreachable without a mouse.
+                      activeFocusOnTab: true
                       onTextChanged: root.updateDraft(draftRow.index, "name", text)
+                      onActiveFocusChanged: {
+                        if (activeFocus) root.revealInDrafts(nameField, 0, height)
+                      }
                     }
 
                     PanelActionButton {
@@ -884,12 +1169,17 @@ Panel {
                       hoverColor: Color.urgent
                       fontFamily: root.fontFamily
                       onClicked: root.removeDraft(draftRow.index)
+                      onActiveFocusChanged: {
+                        if (activeFocus) root.revealInDrafts(removeButton, 0, height)
+                      }
                     }
                   }
 
                   Rectangle {
                     width: parent.width
-                    height: Style.space(64)
+                    // Tall enough to be worth typing in when it is empty, and
+                    // as tall as it needs to be once it is not.
+                    height: Math.max(Style.space(76), promptField.implicitHeight + Style.space(8))
                     radius: Style.cornerRadius
                     color: Style.controlFill(promptField.activeFocus, false, root.foreground, root.accent)
                     border.width: 1
@@ -897,34 +1187,46 @@ Panel {
                       ? root.accent
                       : Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.15)
 
-                    ScrollView {
-                      anchors.fill: parent
-                      anchors.margins: Style.space(5)
-                      clip: true
+                    TextArea {
+                      id: promptField
+                      anchors.left: parent.left
+                      anchors.right: parent.right
+                      anchors.top: parent.top
+                      anchors.margins: Style.space(4)
+                      text: draftRow.prompt
+                      onTextChanged: root.updateDraft(draftRow.index, "prompt", text)
+                      wrapMode: TextArea.Wrap
+                      textFormat: TextEdit.PlainText
+                      font.family: root.fontFamily
+                      // Body, not caption. A prompt is the thing being written
+                      // on this screen; it should read like the box in the
+                      // main view rather than like a footnote.
+                      font.pixelSize: Style.font.body
+                      color: root.foreground
+                      selectionColor: Style.selectionFillFor(root.foreground, root.accent)
+                      selectedTextColor: root.foreground
+                      placeholderText: "What should the agent do with the text?"
+                      placeholderTextColor: Qt.darker(root.foreground, 1.6)
+                      background: null
 
-                      TextArea {
-                        id: promptField
-                        text: draftRow.prompt
-                        onTextChanged: root.updateDraft(draftRow.index, "prompt", text)
-                        wrapMode: TextArea.Wrap
-                        textFormat: TextEdit.PlainText
-                        font.family: root.fontFamily
-                        font.pixelSize: Style.font.caption
-                        color: root.foreground
-                        selectionColor: Style.selectionFillFor(root.foreground, root.accent)
-                        selectedTextColor: root.foreground
-                        placeholderText: "What should the agent do with the text?"
-                        placeholderTextColor: Qt.darker(root.foreground, 1.6)
-                        background: null
+                      activeFocusOnTab: true
 
-                        Keys.onPressed: function(event) {
-                          if (event.key === Qt.Key_Tab || event.key === Qt.Key_Backtab) {
-                            promptField.nextItemInFocusChain(event.key === Qt.Key_Tab).forceActiveFocus()
-                            event.accepted = true
-                          } else if (event.key === Qt.Key_Escape) {
-                            root.close()
-                            event.accepted = true
-                          }
+                      // The cursor can walk off the bottom of a long prompt,
+                      // and Tab can land on a row below the fold. Both are the
+                      // same fix: drag the window to wherever the keyboard is.
+                      onCursorRectangleChanged: {
+                        if (activeFocus)
+                          root.revealInDrafts(promptField, cursorRectangle.y, cursorRectangle.height)
+                      }
+                      onActiveFocusChanged: {
+                        if (activeFocus)
+                          root.revealInDrafts(promptField, cursorRectangle.y, cursorRectangle.height)
+                      }
+
+                      Keys.onPressed: function(event) {
+                        if (event.key === Qt.Key_Tab || event.key === Qt.Key_Backtab) {
+                          promptField.nextItemInFocusChain(event.key === Qt.Key_Tab).forceActiveFocus()
+                          event.accepted = true
                         }
                       }
                     }
@@ -961,6 +1263,21 @@ Panel {
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
           }
+        }
+
+        // Every control here is reachable with Tab, which is worth saying
+        // once: an icon button gives up its tooltip only to a mouse, so a
+        // keyboard has nothing else to read.
+        Text {
+          width: parent.width
+          textFormat: Text.PlainText
+          text: root.settingsOpen
+            ? "Tab moves \u00B7 Ctrl+Enter saves \u00B7 Esc closes"
+            : "Tab moves \u00B7 Enter presses \u00B7 Ctrl+Enter transforms \u00B7 Esc closes"
+          color: Qt.darker(root.foreground, 1.9)
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+          wrapMode: Text.Wrap
         }
       }
     }
