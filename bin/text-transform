@@ -11,7 +11,7 @@
 #
 # Everything crosses process boundaries as JSON on stdin and stdout, so the
 # text being transformed never appears in a command line where `ps` would show
-# it. Three agents (grok, agy, copilot) only accept a prompt as an argument,
+# it. Two agents (grok, copilot) only accept a prompt as an argument,
 # and are marked as such so the README can say so.
 #
 # Commands:
@@ -30,6 +30,31 @@ TRANSFORMS_FILE="$CONFIG_DIR/transformations.json"
 # means the agent is stuck rather than thinking, and a widget that waits
 # forever looks broken.
 TIMEOUT_SECONDS=180
+
+# The timeout bounds how long a run takes, which is not the same as bounding
+# how much it produces: an agent that streams forever, or a clipboard holding a
+# log file, fills memory and disk well inside three minutes. So every stream in
+# and out of this script is capped in bytes as well.
+#
+# A paragraph is a few hundred bytes and the longest thing anyone sensibly
+# transforms is a page or two, so these are generous rather than tight, and
+# they exist to stop a runaway rather than to enforce a style.
+MAX_REQUEST_BYTES=262144    # what the panel or a pipe may hand us
+MAX_STREAM_BYTES=1048576    # per agent stream, read back into a variable
+MAX_STREAM_KB=1024          # the same, as the ulimit -f the agent runs under
+MAX_ANSWER_BYTES=131072     # the transformed text we hand back
+MAX_CONFIG_BYTES=1048576    # the transformations file on disk
+
+# Read at most $2 bytes of $1, and refuse to follow a symlink or block on a
+# fifo while doing it. A plain `[ -f ]` followed by a redirect is two steps
+# with a gap in between: what was checked and what is opened need not be the
+# same file. dd does the open itself with both flags set, so the check and the
+# open are one step.
+read_bounded_file() {
+  local file="$1" max="$2" blocks
+  blocks=$(( (max + 4095) / 4096 ))
+  dd if="$file" iflag=nofollow,nonblock bs=4096 count="$blocks" 2>/dev/null
+}
 
 die() {
   jq -n --arg error "$1" '{ok: false, error: $error}'
@@ -119,14 +144,16 @@ clean_transformations() {
 
 load_transformations() {
   local saved=""
-  # Reading is already safe on its own: readable_file refuses a symlink and the
-  # defaults take over. But the repair only ran on the save paths, so anything
-  # planted in the directory sat there until the next save, which for somebody
-  # who never edits a prompt is never. Sweep on the way in too.
+  # The repair used to run on the save paths only, so anything planted in the
+  # directory sat there until the next save, which for somebody who never edits
+  # a prompt is never. Sweep on the way in too.
   repair_dir
-  if readable_file "$TRANSFORMS_FILE"; then
-    saved="$(clean_transformations <"$TRANSFORMS_FILE")"
-  fi
+  # No `[ -f ]` first: that checks one file and the redirect then opens
+  # whatever is at the path a moment later. read_bounded_file opens it once,
+  # refusing to follow a symlink and refusing to block on a fifo, and stops
+  # after a bounded number of bytes. A file that is none of those things reads
+  # as nothing here, and the defaults take over.
+  saved="$(read_bounded_file "$TRANSFORMS_FILE" "$MAX_CONFIG_BYTES" | clean_transformations)"
   if [[ -z "$saved" || "$saved" == "[]" ]]; then
     defaults_json | jq -c .
   else
@@ -160,6 +187,36 @@ agent_label() {
   esac
 }
 
+# Every codex feature that carries a tool, switched off. There is no single
+# flag for this, so it is a list, and it is checked against the config
+# reference rather than guessed:
+# https://developers.openai.com/codex/config-reference
+#
+# Kept as an array beside the agents rather than inline, because it is the one
+# entry in build_command that will need touching when codex ships a feature,
+# and a comment on a twenty-line command line is easy to miss. `web_search` is
+# top level and takes a mode rather than a boolean; the `features.web_search*`
+# keys that look like they would do it are deprecated and warn on stderr.
+CODEX_NO_TOOLS=(
+  -c 'web_search="disabled"'
+  -c features.shell_tool=false
+  -c features.unified_exec=false
+  -c features.shell_snapshot=false
+  -c features.browser_use=false
+  -c features.browser_use_external=false
+  -c features.browser_use_full_cdp_access=false
+  -c features.computer_use=false
+  -c features.apps=false
+  -c features.plugins=false
+  -c features.remote_plugin=false
+  -c features.multi_agent=false
+  -c features.hooks=false
+  -c features.memories=false
+  -c tools.web_search=false
+  -c tools.view_image=false
+  -c tools.apps=false
+)
+
 # Which harness Ori should be pointed at, in the order that gives the cleanest
 # answer back. Ori is not an agent but a launcher that runs one of the others
 # against OpenRouter, so the harness decides the print mode.
@@ -174,34 +231,51 @@ ori_harness() {
   return 1
 }
 
-# Fills CMD with the command to run and sets USE_STDIN. Every entry
-# deliberately runs with as few tools as the agent lets us ask for: the text
-# being transformed is untrusted input, and a transform needs no tools at all.
+# Fills CMD with the command to run and sets USE_STDIN.
 #
-# $1 agent, $2 the full prompt, $3 the file codex should leave its answer in.
+# The text being transformed is untrusted: it arrives from a clipboard, and a
+# language model can be talked into treating it as instructions however plainly
+# the prompt says otherwise. So the prompt is not the boundary. The boundary is
+# that the agent has no tools at all, and the only agents driven here are the
+# ones that can be told so in a way that does not depend on us keeping a list
+# of tool names up to date:
+#
+#   claude    --tools ""            allow-list, documented as "disable all tools"
+#   pi        --no-tools            built-in and extension tools both
+#   omp       --no-tools            built-in tools
+#   ori       passes its arguments to claude or pi untouched, so it inherits
+#   grok      --tools ""            allow-list of built-in tools
+#   copilot   --available-tools=""  "only these tools will be available"
+#
+# One switch each, so a tool added by an update is off without this list being
+# touched. Codex is the exception: it has no such switch, but it does expose
+# every tool-bearing feature as its own config key, and CODEX_NO_TOOLS turns
+# the lot off. That is a list rather than a switch, so it needs revisiting when
+# codex adds a feature, and the read-only sandbox sits under it as a second
+# layer for exactly that reason.
+#
+# Three agents Omarchy offers have neither, and they fail closed rather than
+# run with tools: opencode's `run` takes only an --agent profile out of the
+# user's own config, crush's `run` has no tool flag at all, and antigravity
+# has only a blanket --sandbox that restricts the terminal rather than
+# removing tools. See agent_refusal.
+#
+# $1 agent, $2 the full prompt, $3 the file codex is told to write its answer
+# to, because codex prints progress around the answer on stdout.
 build_command() {
   local agent="$1" prompt="$2" outfile="$3"
   USE_STDIN=1
   case "$agent" in
   claude)
-    # --strict-mcp-config with no --mcp-config means no MCP servers get loaded.
-    # Measured on a normal setup that halves the time a transform takes, from
-    # ~5.8s to ~2.9s, because connecting to them is most of the startup. It
-    # also means none of their tools exist for this run, which a transform has
-    # no use for anyway.
-    CMD=(claude -p --output-format text --strict-mcp-config
-      --disallowedTools "Bash,Edit,Write,Read,Glob,Grep,WebFetch,WebSearch,Task,NotebookEdit,TodoWrite")
+    # --strict-mcp-config with no --mcp-config means no MCP servers get loaded,
+    # so none of their tools exist either. Measured on a normal setup that
+    # halves the time a transform takes, from ~5.8s to ~2.9s, because
+    # connecting to them is most of the startup.
+    CMD=(claude -p --output-format text --strict-mcp-config --tools "")
     ;;
   codex)
-    # exec prints its own progress around the answer, so the answer is read
-    # back from the file -o writes instead of out of stdout.
-    CMD=(codex exec --sandbox read-only --skip-git-repo-check --color never -o "$outfile" -)
-    ;;
-  opencode)
-    CMD=(opencode run --format json)
-    ;;
-  crush)
-    CMD=(crush run -q)
+    CMD=(codex exec --sandbox read-only --skip-git-repo-check --color never
+      -o "$outfile" "${CODEX_NO_TOOLS[@]}" -)
     ;;
   pi)
     CMD=(pi -p --no-tools --no-session)
@@ -215,24 +289,16 @@ build_command() {
     if [[ "$harness" == "pi" ]]; then
       CMD=(ori pi -p --no-tools --no-session)
     else
-      CMD=(ori claude -p --output-format text)
+      CMD=(ori claude -p --output-format text --strict-mcp-config --tools "")
     fi
     ;;
   grok)
     USE_STDIN=0
-    CMD=(grok --disallowed-tools "bash,edit,write,read,glob,grep,web_search,web_fetch"
-      -p "$prompt")
-    ;;
-  agy)
-    USE_STDIN=0
-    CMD=(agy --sandbox -p "$prompt")
+    CMD=(grok --tools "" -p "$prompt")
     ;;
   copilot)
-    # Non-interactive mode insists on --allow-all-tools, so the denials do the
-    # narrowing instead, on top of the empty working directory every run gets.
     USE_STDIN=0
-    CMD=(copilot --no-color --log-level none --allow-all-tools
-      --deny-tool shell --deny-tool write --no-ask-user -p "$prompt")
+    CMD=(copilot --no-color --log-level none --available-tools="" --no-ask-user -p "$prompt")
     ;;
   *)
     return 1
@@ -241,11 +307,13 @@ build_command() {
   return 0
 }
 
-# Whether this plugin knows how to drive that agent without a terminal. Kept
-# beside build_command, and the two lists have to stay in step.
+# Whether this plugin knows how to drive that agent without a terminal and
+# without tools. Kept beside build_command, and the two lists have to stay in
+# step: an agent named here and missing there runs nothing, and an agent named
+# there and missing here would run with whatever tools it has.
 agent_supported() {
   case "$1" in
-  claude | codex | opencode | crush | pi | omp | ori | grok | agy | copilot) return 0 ;;
+  claude | codex | pi | omp | ori | grok | copilot) return 0 ;;
   *) return 1 ;;
   esac
 }
@@ -258,6 +326,18 @@ agent_blocker() {
     ori_harness >/dev/null 2>&1 ||
       printf 'Ori needs Claude Code or Pi installed to transform text'
     ;;
+  esac
+}
+
+# Said in the panel when the default agent is one this plugin refuses to drive.
+# Naming the reason matters: "unsupported" reads like the plugin is behind, and
+# this is a decision rather than a gap.
+agent_refusal() {
+  case "$1" in
+  opencode) printf 'OpenCode has no flag to run without tools, so this plugin will not send your text to it' ;;
+  crush) printf 'Crush has no flag to run without tools, so this plugin will not send your text to it' ;;
+  agy) printf 'Antigravity only offers a blanket sandbox, not a way to remove its tools, so this plugin will not send your text to it' ;;
+  *) printf 'This plugin does not know how to run %s without tools' "$(agent_label "$1")" ;;
   esac
 }
 
@@ -275,8 +355,8 @@ agent_state() {
   label="$(agent_label "$name")"
 
   if ! agent_supported "$name"; then
-    jq -n --arg agent "$name" --arg label "$label" \
-      '{agent: $agent, label: $label, ready: false, reason: "unsupported"}'
+    jq -n --arg agent "$name" --arg label "$label" --arg reason "$(agent_refusal "$name")" \
+      '{agent: $agent, label: $label, ready: false, reason: $reason}'
     return
   fi
 
@@ -414,13 +494,20 @@ run_transform() {
   # running and billing. `exec` replaces the subshell with timeout, which
   # makes $! the timeout process itself, and GNU timeout passes the signal on
   # to the agent under it.
+  #
+  # `ulimit -f` is what actually bounds the output. Reading back with a limit
+  # would still let an agent that streams without stopping fill the disk first,
+  # and the limit has to be set before the agent starts, in the shell that
+  # becomes it. The kernel then refuses the write past the limit and the run
+  # fails, which for a transform that was never going to be that long is the
+  # right way round.
   local outcap="$workdir/stdout.txt" agent_pid
   if [[ "$USE_STDIN" == "1" ]]; then
     printf '%s' "$prompt" |
-      (cd "$workdir" && exec timeout -k 5 "$TIMEOUT_SECONDS" "${CMD[@]}") \
+      (ulimit -f "$MAX_STREAM_KB"; cd "$workdir" && exec timeout -k 5 "$TIMEOUT_SECONDS" "${CMD[@]}") \
       >"$outcap" 2>"$errfile" &
   else
-    (cd "$workdir" && exec timeout -k 5 "$TIMEOUT_SECONDS" "${CMD[@]}" </dev/null) \
+    (ulimit -f "$MAX_STREAM_KB"; cd "$workdir" && exec timeout -k 5 "$TIMEOUT_SECONDS" "${CMD[@]}" </dev/null) \
       >"$outcap" 2>"$errfile" &
   fi
   agent_pid=$!
@@ -431,8 +518,11 @@ run_transform() {
   status=$?
   trap - TERM INT
 
-  stdout="$(cat -- "$outcap" 2>/dev/null)"
-  stderr="$(cat -- "$errfile" 2>/dev/null)"
+  # Bounded again on the way in. The ulimit already caps the files, but these
+  # two are what end up in shell variables and then in the JSON, and a second
+  # cap costs nothing.
+  stdout="$(read_bounded_file "$outcap" "$MAX_STREAM_BYTES")"
+  stderr="$(read_bounded_file "$errfile" "$MAX_STREAM_BYTES")"
 
   if [[ "$status" == "124" || "$status" == "137" ]]; then
     rm -rf -- "$workdir"
@@ -448,7 +538,9 @@ run_transform() {
     die "${detail:-$label exited with status $status}"
   fi
 
-  answer="$(read_answer "$agent" "$stdout" "$outfile" | tidy)"
+  # head last, so what goes into the JSON the panel parses is bounded whatever
+  # the agent did.
+  answer="$(read_answer "$agent" "$stdout" "$outfile" | tidy | head -c "$MAX_ANSWER_BYTES")"
   rm -rf -- "$workdir"
 
   # An agent can also exit zero having said nothing, which is worth telling
@@ -469,11 +561,9 @@ read_answer() {
   local agent="$1" stdout="$2" outfile="$3"
   case "$agent" in
   codex)
-    readable_file "$outfile" && cat -- "$outfile"
-    ;;
-  opencode)
-    printf '%s\n' "$stdout" |
-      jq -Rrj 'fromjson? | select(.type == "text") | .part.text // empty'
+    # Bounded and no-follow like every other read: the file sits in a private
+    # working directory, but it is written by the agent rather than by us.
+    read_bounded_file "$outfile" "$MAX_ANSWER_BYTES"
     ;;
   omp)
     printf '%s\n' "$stdout" |
@@ -491,7 +581,9 @@ read_answer() {
 
 read_request() {
   local raw
-  raw="$(cat)"
+  # head rather than cat: whatever is on the other end of this pipe decides how
+  # much it sends, and that is not something to take on trust.
+  raw="$(head -c "$MAX_REQUEST_BYTES")"
   [[ -n "${raw//[[:space:]]/}" ]] || raw='{}'
   printf '%s' "$raw" | jq -c 'if type == "object" then . else {} end' 2>/dev/null || printf '{}'
 }

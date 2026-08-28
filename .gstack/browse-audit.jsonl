@@ -1,0 +1,9 @@
+{"ts":"2026-08-28T11:43:44.894Z","cmd":"goto","args":"https://raw.githubusercontent.com/openai/codex/main/docs/config.md","origin":"https://raw.githubusercontent.com/openai/codex/main/docs/config.md","durationMs":88,"status":"ok","hasCookies":false,"mode":"launched"}
+{"ts":"2026-08-28T11:43:44.937Z","cmd":"text","args":"","origin":"https://raw.githubusercontent.com/openai/codex/main/docs/config.md","durationMs":5,"status":"ok","hasCookies":false,"mode":"launched"}
+{"ts":"2026-08-28T11:43:54.047Z","cmd":"url","args":"","origin":"https://raw.githubusercontent.com/openai/codex/main/docs/config.md","durationMs":3,"status":"ok","hasCookies":false,"mode":"launched"}
+{"ts":"2026-08-28T11:43:54.086Z","cmd":"text","args":"","origin":"https://raw.githubusercontent.com/openai/codex/main/docs/config.md","durationMs":1,"status":"ok","hasCookies":false,"mode":"launched"}
+{"ts":"2026-08-28T11:44:05.147Z","cmd":"goto","args":"https://developers.openai.com/codex/config-reference","origin":"https://learn.chatgpt.com/docs/config-file/config-reference","durationMs":445,"status":"ok","hasCookies":false,"mode":"launched"}
+{"ts":"2026-08-28T11:44:07.202Z","cmd":"text","args":"","origin":"https://learn.chatgpt.com/docs/config-file/config-reference","durationMs":14,"status":"ok","hasCookies":false,"mode":"launched"}
+{"ts":"2026-08-28T11:44:21.453Z","cmd":"text","args":"","origin":"https://learn.chatgpt.com/docs/config-file/config-reference","durationMs":15,"status":"ok","hasCookies":false,"mode":"launched"}
+{"ts":"2026-08-28T11:45:59.873Z","cmd":"text","args":"","origin":"https://learn.chatgpt.com/docs/config-file/config-reference","durationMs":17,"status":"ok","hasCookies":false,"mode":"launched"}
+{"ts":"2026-08-28T11:45:59.925Z","cmd":"text","args":"","origin":"https://learn.chatgpt.com/docs/config-file/config-reference","durationMs":14,"status":"ok","hasCookies":false,"mode":"launched"}
