@@ -92,6 +92,19 @@ write_private() {
 
 readable_file() { [[ -f "$1" && ! -L "$1" ]]; }
 
+# The repair half of private_dir, without the mkdir: safe to call on a read,
+# where creating the directory would be a side effect nobody asked for. A
+# directory that is not ours, or is a symlink, is left alone rather than
+# touched.
+repair_dir() {
+  [[ -d "$CONFIG_DIR" && ! -L "$CONFIG_DIR" ]] || return 0
+  [[ "$(stat -c '%u' -- "$CONFIG_DIR" 2>/dev/null)" == "$(id -u)" ]] || return 0
+  chmod 700 -- "$CONFIG_DIR" 2>/dev/null
+  find "$CONFIG_DIR" -mindepth 1 -maxdepth 1 ! -type f -exec rm -rf -- {} + 2>/dev/null
+  find "$CONFIG_DIR" -mindepth 1 -maxdepth 1 -type f -exec chmod 600 -- {} + 2>/dev/null
+  return 0
+}
+
 # Anything with a name and a prompt, trimmed and capped. A saved file that has
 # rotted into something else yields nothing here, and the defaults take over.
 clean_transformations() {
@@ -106,6 +119,11 @@ clean_transformations() {
 
 load_transformations() {
   local saved=""
+  # Reading is already safe on its own: readable_file refuses a symlink and the
+  # defaults take over. But the repair only ran on the save paths, so anything
+  # planted in the directory sat there until the next save, which for somebody
+  # who never edits a prompt is never. Sweep on the way in too.
+  repair_dir
   if readable_file "$TRANSFORMS_FILE"; then
     saved="$(clean_transformations <"$TRANSFORMS_FILE")"
   fi
