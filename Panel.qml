@@ -33,6 +33,11 @@ Panel {
   moduleName: "jankeesvw.text-transform"
   ipcTarget: "jankeesvw.text-transform"
 
+  // Panel's own IpcHandler is switched off so this file can add `paste` to the
+  // same target. Two handlers on one target is one too many, so the five it
+  // would have given us are repeated below.
+  manageIpc: false
+
   // The script that does the talking sits next to this file, so the plugin
   // runs from wherever it was installed without putting anything on $PATH.
   readonly property string script:
@@ -165,6 +170,32 @@ Panel {
   // someone looks for it.
   function pasteInput() {
     if (!pasteProc.running) pasteProc.running = true
+  }
+
+  // Set while a keybinding is opening the panel on the clipboard, so the paste
+  // that comes back lands the focus on the run button rather than in the input
+  // box. Then the whole thing is one key to open and one to go.
+  property bool openedForClipboard: false
+
+  // What the `paste` IPC method does: open, fill the input from the clipboard,
+  // and leave the cursor on the button. The paste is a process, so the focus
+  // cannot be set here; pasteProc does it when the text actually arrives.
+  //
+  // A bar widget exists once per monitor and all of those copies register the
+  // same IPC target, so the call arrives at whichever one claimed it rather
+  // than at the one you are looking at. The bar already answers that question
+  // for `shell summon`, so ask it the same way and hand the work over.
+  function pasteAndArm() {
+    var chosen = bar && typeof bar.findPanelWidget === "function"
+      ? bar.findPanelWidget(moduleName)
+      : null
+    if (chosen && chosen !== root && typeof chosen.pasteAndArm === "function") {
+      chosen.pasteAndArm()
+      return
+    }
+    openedForClipboard = true
+    if (!opened) open()
+    pasteInput()
   }
 
   // Send the answer back up to the input, so it can be run through another
@@ -408,11 +439,19 @@ Panel {
     command: ["wl-paste", "--no-newline"]
     stdout: StdioCollector {
       onStreamFinished: {
+        // Whatever happens next, the clipboard opening is over: an empty
+        // clipboard must not leave the flag set for the next ordinary paste.
+        var arm = root.openedForClipboard
+        root.openedForClipboard = false
         if (text === "") return
         root.inputText = text
         inputField.text = text
         inputField.cursorPosition = text.length
-        inputField.forceActiveFocus()
+        // KeyboardPanel focuses its focusTarget on open through Qt.callLater,
+        // so hand the focus over the same way or that call lands after this
+        // one and takes it back.
+        if (arm) Qt.callLater(function() { runButton.forceActiveFocus() })
+        else inputField.forceActiveFocus()
       }
     }
   }
@@ -431,6 +470,23 @@ Panel {
   }
 
   Process { id: notifyProc }
+
+  // The five Panel would have registered, plus the one this panel adds.
+  //
+  //   omarchy-shell jankeesvw.text-transform paste
+  //
+  // opens on whatever is on the clipboard with the run button focused, which
+  // makes a keybinding one key to open and one to go.
+  IpcHandler {
+    target: root.ipcTarget
+
+    function open(): void { root.open() }
+    function close(): void { root.close() }
+    function show(): void { root.open() }
+    function hide(): void { root.close() }
+    function toggle(): void { root.toggle() }
+    function paste(): void { root.pasteAndArm() }
+  }
 
   ListModel { id: draft }
 

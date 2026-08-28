@@ -77,6 +77,14 @@ A keybinding, if you want one:
 o.bind("SUPER + T", "Text Transform", "omarchy-shell shell toggle jankeesvw.text-transform")
 ```
 
+And one for the thing you probably came here to do, which is transform what you just copied:
+
+```lua
+o.bind("SUPER + SHIFT + V", "Transform clipboard", "omarchy-shell jankeesvw.text-transform paste")
+```
+
+That opens the panel with the clipboard already in the input box and the run button focused, so it is one key to open and Enter to go. It uses the last transformation you picked, which is usually the one you want again.
+
 ## Removing it
 
 ```bash
