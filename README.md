@@ -32,22 +32,23 @@ If no default agent is set, the panel says so instead of failing quietly.
 
 ## Supported agents
 
-Every agent Omarchy offers has a non-interactive mode, and this plugin drives each one through its own:
+The text you transform is untrusted: it comes off a clipboard, and a language model can be talked into treating it as instructions however plainly the prompt says otherwise. So the prompt is not what keeps you safe. What keeps you safe is that the agent has no tools, and this plugin only drives agents that can be told so:
 
-| Agent | Runs as | Text goes in via |
+| Agent | Tools off with | Text goes in via |
 | --- | --- | --- |
-| Claude Code | `claude -p --strict-mcp-config` | stdin |
-| Codex | `codex exec --sandbox read-only` | stdin |
-| OpenCode | `opencode run --format json` | stdin |
-| Crush | `crush run -q` | stdin |
-| Pi | `pi -p --no-tools` | stdin |
-| Oh My Pi | `omp -p --no-tools` | stdin |
-| Ori | `ori claude -p` (or `ori pi -p`) | stdin |
-| Grok | `grok -p` | argument |
-| Antigravity | `agy --sandbox -p` | argument |
-| GitHub Copilot | `copilot -p --allow-all-tools` | argument |
+| Claude Code | `--tools ""` | stdin |
+| Codex | every tool-bearing feature off by config | stdin |
+| Pi | `--no-tools` | stdin |
+| Oh My Pi | `--no-tools` | stdin |
+| Ori | inherited from claude or pi | stdin |
+| Grok | `--tools ""` | argument |
+| GitHub Copilot | `--available-tools=""` | argument |
 
-Grok, Antigravity and Copilot have no way to take a prompt on stdin, so with those three your text is briefly visible in the process list to other accounts on the machine. The other seven never put it there. If that matters on your machine, pick one of the seven.
+Five of those are a single switch that means "no tools", so a tool added by an update is off without this plugin being changed. Codex is the exception: it has no such switch, and instead each of its tool-bearing features is turned off by name, with the read-only sandbox under it as a second layer. That list needs revisiting when Codex ships a new feature.
+
+**OpenCode, Crush and Antigravity are refused.** Not because they are worse, but because none of them can be told to run without tools from the command line: OpenCode's `run` only takes an `--agent` profile out of your own config, Crush's `run` has no tool flag, and Antigravity has a blanket `--sandbox` that restricts the terminal rather than removing tools. If one of those is your default agent, the panel says so and transforms nothing.
+
+Grok and Copilot have no way to take a prompt on stdin, so with those two your text is briefly visible in the process list to other accounts on the machine. The other five never put it there. If that matters on your machine, pick one of the five.
 
 Ori is a launcher rather than an agent, so it needs Claude Code or Pi installed to have something to launch.
 
@@ -57,9 +58,10 @@ Claude Code runs with `--strict-mcp-config`, which loads no MCP servers. Measure
 
 The text is handed to the agent as one prompt, and the agent is told to treat everything between the markers as text rather than as instructions. That is not a guarantee, because a language model can be talked into things, so the plugin narrows what an agent could do if it were:
 
-- Every run happens in a fresh empty directory, so there is no project for the agent to read or write.
-- Tools are switched off wherever the agent supports it (`--no-tools`, `--disallowedTools`, `--sandbox read-only`).
-- Copilot's non-interactive mode insists on `--allow-all-tools`, so its shell and write tools are denied by name instead.
+- The agent runs with no tools at all, and an agent that cannot be told that is refused rather than driven anyway. See *Supported agents*.
+- Every run happens in a fresh empty directory, so even if a tool did appear there is no project to read or write.
+- Everything is bounded in bytes as well as in time: what you send in, what the agent writes out, and what comes back. The agent runs under a file size limit the kernel enforces, so it cannot fill your disk on the way to being slow.
+- The transformations file is opened without following symlinks and without blocking on anything that is not a regular file, so nothing planted at that path is read or written through.
 
 Text you paste is still sent to whatever service your agent talks to, and counted against your plan there. That is the trade: no key to configure, but also no local-only mode.
 
