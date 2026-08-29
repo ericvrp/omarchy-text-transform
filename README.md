@@ -16,7 +16,7 @@ A transform takes a few seconds. You do not have to sit and watch it: close the 
 
 If it takes too long, the arrow becomes a stop button, and Ctrl+Enter does the same. Stopping kills the agent rather than just hiding the spinner: an agent left thinking is still spending your tokens.
 
-Nothing here needs the mouse. The panel opens with the cursor in the input box; Tab walks both boxes, the dropdown and every button, Enter or space presses whatever is focused, Ctrl+Enter transforms or stops from anywhere, and Escape closes. Bind the panel to a key (see *Installing*) and the whole thing is a keyboard away.
+Nothing here needs the mouse. The panel opens with the cursor in the input box; Tab walks both boxes, the dropdown and every button, Enter or space presses whatever is focused, Ctrl+Enter transforms or stops from anywhere, and Escape closes. The registered panel shortcut keeps the whole thing a keyboard away.
 
 A transformation is just a name and a prompt. The name is what the dropdown shows; the prompt is what the agent is told to do with your text. Press the gear to edit them, add your own, or throw out the ones you never use.
 
@@ -26,7 +26,7 @@ Three come with it: fix typos, make it shorter, translate to Dutch. That is deli
 
 - Omarchy Quattro (4.x)
 - A default agent: `omarchy default agent claude` (or `codex`, `opencode`, `crush`, `pi`, `omp`, `grok`, `agy`, `copilot`, `ori`)
-- `jq`, `wl-copy`, `wl-paste`, and `wtype` (all standard on Omarchy)
+- `jq`, `wl-copy`, and `wl-paste` (all standard on Omarchy)
 
 If no default agent is set, the panel says so instead of failing quietly.
 
@@ -75,42 +75,22 @@ omarchy plugin enable jankeesvw.text-transform
 omarchy bar move jankeesvw.text-transform --section right
 ```
 
-The plugin registers the selection shortcut below while it is enabled. The
-other shortcuts are optional: add whichever ones you want to
-`~/.config/hypr/bindings.lua`, then run `hyprctl reload`.
+The plugin registers both shortcuts while it is enabled:
 
 ```text
 SUPER + SHIFT + T  Toggle Text Transform panel
 SUPER + SHIFT + V  Transform clipboard
-SUPER + ALT + V    Transform selection (registered by the plugin)
 ```
 
-The suggested chords are not used by Omarchy Quattro's current default
-bindings. The optional bindings are:
+The panel shortcut opens the panel normally. The clipboard shortcut reads the
+current text clipboard, applies the last transformation, and replaces the
+clipboard with the result. The panel stays closed and its input and output are
+untouched. The bar icon animates while it works; notifications are shown only
+when the clipboard has no text, the transform fails, or it finishes.
 
-```lua
-o.bind("SUPER + SHIFT + T", "Text Transform", "omarchy-shell shell toggle jankeesvw.text-transform")
-o.bind("SUPER + SHIFT + V", "Transform clipboard", "omarchy-shell jankeesvw.text-transform paste")
-```
-
-The panel shortcut opens the panel normally. The clipboard shortcut opens it
-with the clipboard already in the input box and the run button focused, so it
-is one key to open and Enter to go.
-
-For the automatically registered selection shortcut, select text in another
-application and press the shortcut. The panel stays closed and its input and
-output are untouched. The bar icon animates while the last transformation is
-running; notifications are shown only when no text is selected, the transform
-fails, or it finishes.
-
-In an ordinary editable application, the transformed text replaces the
-selection. Keep that window focused while the transform runs; if focus changes,
-the result is copied to the clipboard instead of being pasted into the wrong
-window. Mouse-aware terminal applications such as OpenCode do not expose their
-own internal highlights to Wayland. Use `Shift`+drag to make an exported terminal
-selection before pressing the shortcut. Terminal selections are rendered screen
-cells rather than editable ranges, so their transformed text is copied to the
-clipboard instead of being pasted into an unrelated input cursor.
+Copy and paste using whatever shortcuts the current application supports. This
+keeps the plugin independent of GUI, terminal, TUI, XWayland, and application-
+specific selection behavior.
 
 ## Removing it
 
