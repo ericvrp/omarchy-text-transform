@@ -4,7 +4,7 @@
   "name": "Text Transform",
   "version": "1.0.0",
   "author": "Jankees van Woezik",
-  "description": "Rewrite, translate or fix text with the coding agent Omarchy already runs.",
+  "description": "Rewrite, translate or fix text with the coding agent Omarchy already runs, including selected text.",
   "kinds": [
     "bar-widget"
   ],
@@ -13,7 +13,7 @@
   },
   "barWidget": {
     "displayName": "Text Transform",
-    "description": "Rewrite, translate or fix text with the coding agent Omarchy already runs.",
+    "description": "Rewrite, translate or fix text with the coding agent Omarchy already runs, including selected text.",
     "category": "Apps",
     "allowMultiple": false,
     "defaultSection": "right"

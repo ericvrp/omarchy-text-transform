@@ -26,7 +26,7 @@ Three come with it: fix typos, make it shorter, translate to Dutch. That is deli
 
 - Omarchy Quattro (4.x)
 - A default agent: `omarchy default agent claude` (or `codex`, `opencode`, `crush`, `pi`, `omp`, `grok`, `agy`, `copilot`, `ori`)
-- `jq`, and `wl-copy` for the copy button (both standard on Omarchy)
+- `jq`, `wl-copy`, `wl-paste`, and `wtype` (all standard on Omarchy)
 
 If no default agent is set, the panel says so instead of failing quietly.
 
@@ -86,6 +86,14 @@ o.bind("SUPER + SHIFT + V", "Transform clipboard", "omarchy-shell jankeesvw.text
 ```
 
 That opens the panel with the clipboard already in the input box and the run button focused, so it is one key to open and Enter to go. It uses the last transformation you picked, which is usually the one you want again.
+
+To transform the text currently selected in another application and replace it when the answer is ready:
+
+```lua
+o.bind("SUPER + ALT + V", "Transform selection", "omarchy-shell jankeesvw.text-transform transformSelection")
+```
+
+This keeps the panel closed, uses the last transformation you picked, and sends the result back with a paste so multiline text and special characters are preserved.
 
 ## Removing it
 

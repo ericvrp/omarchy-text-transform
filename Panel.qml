@@ -74,6 +74,11 @@ Panel {
   // Set while a stop is on its way, so the empty answer that follows is read
   // as "you stopped it" rather than as a failure worth reporting.
   property bool cancelled: false
+  // True while a background transform is going to replace the selection that
+  // started it, rather than only filling the output box.
+  property bool replacingSelection: false
+  // wl-copy has to be ready before wtype sends the paste shortcut.
+  property bool selectionClipboardReady: false
 
   // Which agent is going to do the work, so the panel can name it and say so
   // when there is nothing to do the work with.
@@ -137,20 +142,52 @@ Panel {
   }
 
   function runTransform() {
-    if (!canRun) return
+    if (!canRun || replacingSelection) return
+    startTransform(inputText, false)
+  }
+
+  function startTransform(text, replaceSelection) {
+    if (busy) return
     errorText = ""
     outputText = ""
     copied = false
     cancelled = false
+    replacingSelection = replaceSelection
     busy = true
     runProc.request = JSON.stringify({
-      text: inputText,
+      text: text,
       prompt: String(currentTransformation.prompt)
     })
     // onStarted closes stdin to signal end of input, and that sticks: without
     // this the second run has no stdin and the script waits forever on it.
     runProc.stdinEnabled = true
     runProc.running = true
+  }
+
+  // Read the Wayland primary selection and run the current transformation
+  // without opening the panel. The primary selection is the live text
+  // selection, unlike the regular clipboard which may contain older text.
+  function transformSelection() {
+    var chosen = bar && typeof bar.findPanelWidget === "function"
+      ? bar.findPanelWidget(moduleName)
+      : null
+    if (chosen && chosen !== root && typeof chosen.transformSelection === "function") {
+      chosen.transformSelection()
+      return
+    }
+
+    if (busy || selectionProc.running || replacingSelection
+        || selectionClipboardProc.running || selectionReplaceProc.running) return
+
+    if (!agentReady || !currentTransformation) {
+      var problem = agentProblem !== "" ? agentProblem : "The default agent is not ready"
+      errorText = problem
+      notify("Text Transform failed", problem)
+      return
+    }
+
+    errorText = ""
+    selectionProc.running = true
   }
 
   function cancelTransform() {
@@ -223,6 +260,20 @@ Panel {
     copyProc.running = true
     copied = true
     copiedTimer.restart()
+  }
+
+  // Offer the result once for the replacement paste. Once the paste has been
+  // requested, the normal copy path runs again so the result remains on the
+  // clipboard for a later paste too.
+  function replaceSelectionOutput() {
+    if (outputText === "") {
+      replacingSelection = false
+      return
+    }
+    selectionClipboardReady = false
+    selectionClipboardProc.payload = outputText
+    selectionClipboardProc.stdinEnabled = true
+    selectionClipboardProc.running = true
   }
 
   // Settings edit a copy, so abandoning them by closing the panel leaves the
@@ -378,6 +429,7 @@ Panel {
         root.busy = false
         if (root.cancelled) {
           root.cancelled = false
+          root.replacingSelection = false
           return
         }
         var payload
@@ -385,23 +437,29 @@ Panel {
           payload = JSON.parse(text)
         } catch (e) {
           root.errorText = "Could not read the answer"
+          root.replacingSelection = false
           return
         }
         if (payload && payload.ok === true) {
           root.outputText = String(payload.output || "")
           root.errorText = ""
 
-          // Straight onto the clipboard. Transforming text is a step on the
-          // way to pasting it somewhere else, so making that a second click
-          // only adds a click. The copy button stays for a second helping.
-          root.copyOutput()
+          if (root.replacingSelection) {
+            root.replaceSelectionOutput()
+          } else {
+            // Straight onto the clipboard. Transforming text is a step on the
+            // way to pasting it somewhere else, so making that a second click
+            // only adds a click. The copy button stays for a second helping.
+            root.copyOutput()
 
-          // Said out loud even with the panel open, because the clipboard is
-          // the part you cannot see. The text itself stays out of it: a
-          // notification can end up on a lock screen.
-          root.notify("Text Transform", "Transformed and copied to your clipboard")
+            // Said out loud even with the panel open, because the clipboard is
+            // the part you cannot see. The text itself stays out of it: a
+            // notification can end up on a lock screen.
+            root.notify("Text Transform", "Transformed and copied to your clipboard")
+          }
         } else {
           root.errorText = String((payload && payload.error) || "Something went wrong")
+          root.replacingSelection = false
 
           // A failure with the panel open is already on screen in red, so
           // only tell the people who walked away.
@@ -456,6 +514,25 @@ Panel {
     }
   }
 
+  // The primary Wayland selection is the text that is currently highlighted,
+  // rather than whatever was copied most recently.
+  Process {
+    id: selectionProc
+    command: ["wl-paste", "--primary", "--no-newline"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var selected = String(text || "")
+        if (selected.trim().length === 0) {
+          root.errorText = "No text is selected"
+          root.notify("Text Transform failed", "No text is selected")
+          return
+        }
+        root.startTransform(selected, true)
+      }
+    }
+  }
+
   // wl-copy takes the text on stdin for the same reason the script does.
   Process {
     id: copyProc
@@ -469,14 +546,63 @@ Panel {
     }
   }
 
+  // Keep this offer alive only until the injected paste requests it. The
+  // regular copy process below is started again after that request so the
+  // transformed text remains available for a later paste.
+  Process {
+    id: selectionClipboardProc
+    property string payload: ""
+    command: ["wl-copy", "--foreground", "--paste-once"]
+    stdinEnabled: true
+    onStarted: {
+      write(payload)
+      payload = ""
+      stdinEnabled = false
+      root.selectionClipboardReady = true
+      selectionPasteTimer.restart()
+    }
+    onExited: function(exitCode) {
+      root.selectionClipboardReady = false
+      if (root.replacingSelection && !selectionReplaceProc.running) {
+        root.replacingSelection = false
+        root.errorText = "Could not prepare the transformed text for pasting"
+        root.notify("Text Transform failed", "Could not replace the selected text")
+      }
+    }
+  }
+
+  // A virtual keyboard paste keeps multiline and special characters intact,
+  // unlike typing the transformed text one key at a time.
+  Process {
+    id: selectionReplaceProc
+    command: ["wtype", "-M", "ctrl", "-k", "v", "-m", "ctrl"]
+    onExited: function(exitCode) {
+      if (!root.replacingSelection) return
+
+      root.replacingSelection = false
+      if (exitCode === 0) {
+        // The one-shot offer has done its job. Reuse the normal copy path so
+        // the answer remains available on the clipboard after the replacement.
+        root.copyOutput()
+        root.notify("Text Transform", "Transformed and replaced the selected text")
+      } else {
+        if (selectionClipboardProc.running) selectionClipboardProc.signal(15)
+        root.errorText = "Could not replace the selected text"
+        root.notify("Text Transform failed", root.errorText)
+      }
+    }
+  }
+
   Process { id: notifyProc }
 
-  // The five Panel would have registered, plus the one this panel adds.
+  // The five Panel would have registered, plus the two this panel adds.
   //
   //   omarchy-shell jankeesvw.text-transform paste
+  //   omarchy-shell jankeesvw.text-transform transformSelection
   //
-  // opens on whatever is on the clipboard with the run button focused, which
-  // makes a keybinding one key to open and one to go.
+  // `paste` opens on whatever is on the clipboard with the run button focused,
+  // which makes a keybinding one key to open and one to go. `transformSelection`
+  // stays closed and replaces the focused application's current selection.
   IpcHandler {
     target: root.ipcTarget
 
@@ -486,6 +612,7 @@ Panel {
     function hide(): void { root.close() }
     function toggle(): void { root.toggle() }
     function paste(): void { root.pasteAndArm() }
+    function transformSelection(): void { root.transformSelection() }
   }
 
   ListModel { id: draft }
@@ -494,6 +621,18 @@ Panel {
     id: copiedTimer
     interval: 1600
     onTriggered: root.copied = false
+  }
+
+  // Give the one-shot clipboard offer a turn to register before sending the
+  // paste shortcut to the application that still owns the selection.
+  Timer {
+    id: selectionPasteTimer
+    interval: 75
+    repeat: false
+    onTriggered: {
+      if (root.selectionClipboardReady && !selectionReplaceProc.running)
+        selectionReplaceProc.running = true
+    }
   }
 
   Component.onCompleted: {
