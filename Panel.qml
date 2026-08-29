@@ -525,9 +525,10 @@ Panel {
         var selected = String(text || "")
         if (selected.trim().length === 0) {
           root.errorText = "No text is selected"
-          root.notify("Text Transform failed", "No text is selected")
+          root.notify("Text Transform", "No text selected")
           return
         }
+        root.notify("Text Transform", "Transforming selected text")
         root.startTransform(selected, true)
       }
     }

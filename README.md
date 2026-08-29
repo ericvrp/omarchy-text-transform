@@ -75,27 +75,32 @@ omarchy plugin enable jankeesvw.text-transform
 omarchy bar move jankeesvw.text-transform --section right
 ```
 
-A keybinding, if you want one:
+The plugin registers the selection shortcut below while it is enabled. The
+other shortcuts are optional: add whichever ones you want to
+`~/.config/hypr/bindings.lua`, then run `hyprctl reload`.
 
-```lua
-o.bind("SUPER + T", "Text Transform", "omarchy-shell shell toggle jankeesvw.text-transform")
+```text
+SUPER + SHIFT + T  Toggle Text Transform panel
+SUPER + SHIFT + V  Transform clipboard
+SUPER + ALT + V    Transform selection (registered by the plugin)
 ```
 
-And one for the thing you probably came here to do, which is transform what you just copied:
+The suggested chords are not used by Omarchy Quattro's current default
+bindings. The optional bindings are:
 
 ```lua
+o.bind("SUPER + SHIFT + T", "Text Transform", "omarchy-shell shell toggle jankeesvw.text-transform")
 o.bind("SUPER + SHIFT + V", "Transform clipboard", "omarchy-shell jankeesvw.text-transform paste")
 ```
 
-That opens the panel with the clipboard already in the input box and the run button focused, so it is one key to open and Enter to go. It uses the last transformation you picked, which is usually the one you want again.
+The panel shortcut opens the panel normally. The clipboard shortcut opens it
+with the clipboard already in the input box and the run button focused, so it
+is one key to open and Enter to go.
 
-To transform the text currently selected in another application and replace it when the answer is ready:
-
-```lua
-o.bind("SUPER + ALT + V", "Transform selection", "omarchy-shell jankeesvw.text-transform transformSelection")
-```
-
-This keeps the panel closed, uses the last transformation you picked, and sends the result back with a paste so multiline text and special characters are preserved.
+For the automatically registered selection shortcut, select text in another
+application and press the shortcut. The panel stays closed, the last
+transformation is used, and the result is pasted back so multiline text and
+special characters are preserved.
 
 ## Removing it
 
