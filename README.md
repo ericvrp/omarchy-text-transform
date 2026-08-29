@@ -38,17 +38,18 @@ The text you transform is untrusted: it comes off a clipboard, and a language mo
 | --- | --- | --- |
 | Claude Code | `--tools ""` | stdin |
 | Codex | every tool-bearing feature off by config | stdin |
+| OpenCode | `OPENCODE_PERMISSION='{"*":"deny"}' --pure` | stdin |
 | Pi | `--no-tools` | stdin |
 | Oh My Pi | `--no-tools` | stdin |
 | Ori | inherited from claude or pi | stdin |
 | Grok | `--tools ""` | argument |
 | GitHub Copilot | `--available-tools=""` | argument |
 
-Five of those are a single switch that means "no tools", so a tool added by an update is off without this plugin being changed. Codex is the exception: it has no such switch, and instead each of its tool-bearing features is turned off by name, with the read-only sandbox under it as a second layer. That list needs revisiting when Codex ships a new feature.
+Five of those are a single switch that means "no tools", so a tool added by an update is off without this plugin being changed. OpenCode uses its wildcard permission override for the same reason: it denies built-in, MCP and custom tools without this plugin maintaining a tool-name list. Codex is the exception: it has no such switch, and instead each of its tool-bearing features is turned off by name, with the read-only sandbox under it as a second layer. That list needs revisiting when Codex ships a new feature.
 
-**OpenCode, Crush and Antigravity are refused.** Not because they are worse, but because none of them can be told to run without tools from the command line: OpenCode's `run` only takes an `--agent` profile out of your own config, Crush's `run` has no tool flag, and Antigravity has a blanket `--sandbox` that restricts the terminal rather than removing tools. If one of those is your default agent, the panel says so and transforms nothing.
+**Crush and Antigravity are refused.** Not because they are worse, but because neither can be told to run without tools: Crush's `run` has no tool flag, and Antigravity has a blanket `--sandbox` that restricts the terminal rather than removing tools. If one of those is your default agent, the panel says so and transforms nothing. OpenCode is supported by applying `OPENCODE_PERMISSION='{"*":"deny"}'` only to the transform subprocess; your normal OpenCode configuration and default agent remain unchanged.
 
-Grok and Copilot have no way to take a prompt on stdin, so with those two your text is briefly visible in the process list to other accounts on the machine. The other five never put it there. If that matters on your machine, pick one of the five.
+Grok and Copilot have no way to take a prompt on stdin, so with those two your text is briefly visible in the process list to other accounts on the machine. The other six never put it there. If that matters on your machine, pick one of the six.
 
 Ori is a launcher rather than an agent, so it needs Claude Code or Pi installed to have something to launch.
 
@@ -59,6 +60,7 @@ Claude Code runs with `--strict-mcp-config`, which loads no MCP servers. Measure
 The text is handed to the agent as one prompt, and the agent is told to treat everything between the markers as text rather than as instructions. That is not a guarantee, because a language model can be talked into things, so the plugin narrows what an agent could do if it were:
 
 - The agent runs with no tools at all, and an agent that cannot be told that is refused rather than driven anyway. See *Supported agents*.
+- OpenCode runs with `--pure` and a wildcard permission deny, so external plugins and all configured tools are unavailable for the transform subprocess.
 - Every run happens in a fresh empty directory, so even if a tool did appear there is no project to read or write.
 - Everything is bounded in bytes as well as in time: what you send in, what the agent writes out, and what comes back. The agent runs under a file size limit the kernel enforces, so it cannot fill your disk on the way to being slow.
 - The transformations file is opened without following symlinks and without blocking on anything that is not a regular file, so nothing planted at that path is read or written through.

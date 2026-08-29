@@ -246,19 +246,23 @@ ori_harness() {
 #   ori       passes its arguments to claude or pi untouched, so it inherits
 #   grok      --tools ""            allow-list of built-in tools
 #   copilot   --available-tools=""  "only these tools will be available"
+#   opencode  OPENCODE_PERMISSION='{"*":"deny"}' and --pure
 #
-# One switch each, so a tool added by an update is off without this list being
-# touched. Codex is the exception: it has no such switch, but it does expose
-# every tool-bearing feature as its own config key, and CODEX_NO_TOOLS turns
-# the lot off. That is a list rather than a switch, so it needs revisiting when
-# codex adds a feature, and the read-only sandbox sits under it as a second
-# layer for exactly that reason.
+# The single-switch entries above turn off future tools without this list being
+# touched. OpenCode's wildcard permission does the same. Codex is the
+# exception: it has no such switch, but it does expose every tool-bearing
+# feature as its own config key, and CODEX_NO_TOOLS turns the lot off. That is a
+# list rather than a switch, so it needs revisiting when codex adds a feature,
+# and the read-only sandbox sits under it as a second layer for exactly that
+# reason.
 #
-# Three agents Omarchy offers have neither, and they fail closed rather than
-# run with tools: opencode's `run` takes only an --agent profile out of the
-# user's own config, crush's `run` has no tool flag at all, and antigravity
-# has only a blanket --sandbox that restricts the terminal rather than
-# removing tools. See agent_refusal.
+# Crush and Antigravity have no way to remove their tools and fail closed rather
+# than run with them: Crush's `run` has no tool flag, and Antigravity has only a
+# blanket `--sandbox` that restricts the terminal rather than removing tools.
+# OpenCode has no `--no-tools` flag, but its `OPENCODE_PERMISSION` environment
+# override is applied after the user's config, so a wildcard deny gives this
+# subprocess a tool-free agent without changing the user's normal setup. The
+# `--pure` flag also keeps external OpenCode plugins out of the run.
 #
 # $1 agent, $2 the full prompt, $3 the file codex is told to write its answer
 # to, because codex prints progress around the answer on stdout.
@@ -276,6 +280,9 @@ build_command() {
   codex)
     CMD=(codex exec --sandbox read-only --skip-git-repo-check --color never
       -o "$outfile" "${CODEX_NO_TOOLS[@]}" -)
+    ;;
+  opencode)
+    CMD=(env 'OPENCODE_PERMISSION={"*":"deny"}' opencode --pure run --format json)
     ;;
   pi)
     CMD=(pi -p --no-tools --no-session)
@@ -313,7 +320,7 @@ build_command() {
 # there and missing here would run with whatever tools it has.
 agent_supported() {
   case "$1" in
-  claude | codex | pi | omp | ori | grok | copilot) return 0 ;;
+  claude | codex | opencode | pi | omp | ori | grok | copilot) return 0 ;;
   *) return 1 ;;
   esac
 }
@@ -334,7 +341,6 @@ agent_blocker() {
 # this is a decision rather than a gap.
 agent_refusal() {
   case "$1" in
-  opencode) printf 'OpenCode has no flag to run without tools, so this plugin will not send your text to it' ;;
   crush) printf 'Crush has no flag to run without tools, so this plugin will not send your text to it' ;;
   agy) printf 'Antigravity only offers a blanket sandbox, not a way to remove its tools, so this plugin will not send your text to it' ;;
   *) printf 'This plugin does not know how to run %s without tools' "$(agent_label "$1")" ;;
@@ -564,6 +570,10 @@ read_answer() {
     # Bounded and no-follow like every other read: the file sits in a private
     # working directory, but it is written by the agent rather than by us.
     read_bounded_file "$outfile" "$MAX_ANSWER_BYTES"
+    ;;
+  opencode)
+    printf '%s\n' "$stdout" |
+      jq -Rrj 'fromjson? | select(.type == "text") | .part.text // empty'
     ;;
   omp)
     printf '%s\n' "$stdout" |
