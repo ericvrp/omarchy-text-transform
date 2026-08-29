@@ -262,7 +262,10 @@ ori_harness() {
 # OpenCode has no `--no-tools` flag, but its `OPENCODE_PERMISSION` environment
 # override is applied after the user's config, so a wildcard deny gives this
 # subprocess a tool-free agent without changing the user's normal setup. The
-# `--pure` flag also keeps external OpenCode plugins out of the run.
+# `--pure` flag also keeps external OpenCode plugins out of the run. Its normal
+# SQLite database is not used: OpenCode writes that database during startup,
+# which conflicts with this script's file-size limit and with an OpenCode TUI
+# already running, while a transform has no need to persist a session.
 #
 # $1 agent, $2 the full prompt, $3 the file codex is told to write its answer
 # to, because codex prints progress around the answer on stdout.
@@ -282,7 +285,8 @@ build_command() {
       -o "$outfile" "${CODEX_NO_TOOLS[@]}" -)
     ;;
   opencode)
-    CMD=(env 'OPENCODE_PERMISSION={"*":"deny"}' opencode --pure run --format json)
+    CMD=(env 'OPENCODE_DB=:memory:' 'OPENCODE_PERMISSION={"*":"deny"}'
+      opencode --pure run --format json)
     ;;
   pi)
     CMD=(pi -p --no-tools --no-session)
@@ -454,6 +458,8 @@ first_line() {
     message="$(printf '%s\n' "$text" | grep -m1 '[^[:space:]]')" || return 1
   fi
 
+  message="$(printf '%s' "$message" |
+    sed -e $'s/\033\\[[0-9;?]*[ -\\/]*[@-~]//g')"
   printf '%s' "${message:0:300}"
 }
 
