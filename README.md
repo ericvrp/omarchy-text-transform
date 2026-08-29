@@ -45,7 +45,7 @@ The text you transform is untrusted: it comes off a clipboard, and a language mo
 | Grok | `--tools ""` | argument |
 | GitHub Copilot | `--available-tools=""` | argument |
 
-Six of those are a single switch that means "no tools", so a tool added by an update is off without this plugin being changed. OpenCode's switch is a config key rather than a flag, passed inline through `OPENCODE_CONFIG_CONTENT` so it does not depend on your own config, and `--pure` skips external plugins on top of that. Codex is the exception: it has no such switch, and instead each of its tool-bearing features is turned off by name, with the read-only sandbox under it as a second layer. That list needs revisiting when Codex ships a new feature.
+Six of those are a single switch that means "no tools", so a tool added by an update is off without this plugin being changed. OpenCode's switch is a config key rather than a flag, passed inline through `OPENCODE_CONFIG_CONTENT` so it does not depend on your own config, and `--pure` skips external plugins on top of that. Because that config travels in the environment and can be ignored without saying so, the plugin asks OpenCode what the agent resolved to and refuses the run unless every tool comes back off. Codex is the exception: it has no such switch, and instead each of its tool-bearing features is turned off by name, with the read-only sandbox under it as a second layer. That list needs revisiting when Codex ships a new feature.
 
 **Crush and Antigravity are refused.** Not because they are worse, but because neither can be told to run without tools from the command line: Crush's `run` has no tool flag, and Antigravity has a blanket `--sandbox` that restricts the terminal rather than removing tools. If one of those is your default agent, the panel says so and transforms nothing.
 
@@ -61,7 +61,7 @@ The text is handed to the agent as one prompt, and the agent is told to treat ev
 
 - The agent runs with no tools at all, and an agent that cannot be told that is refused rather than driven anyway. See *Supported agents*.
 - Every run happens in a fresh empty directory, so even if a tool did appear there is no project to read or write.
-- Everything is bounded in bytes as well as in time: what you send in, what the agent writes out, and what comes back. The agent runs under a file size limit the kernel enforces, so it cannot fill your disk on the way to being slow. OpenCode is the one exception: it checkpoints its session database when a run starts, and the limit kills that, so it runs without one — its output streams and the timeout still bound it.
+- Everything is bounded in bytes as well as in time: what you send in, what the agent writes out, and what comes back. The agent runs under a file size limit the kernel enforces, so it cannot fill your disk on the way to being slow.
 - The transformations file is opened without following symlinks and without blocking on anything that is not a regular file, so nothing planted at that path is read or written through.
 
 Text you paste is still sent to whatever service your agent talks to, and counted against your plan there. That is the trade: no key to configure, but also no local-only mode.

@@ -220,9 +220,11 @@ CODEX_NO_TOOLS=(
 # The agent opencode runs as, defined here rather than read from the user's
 # config: OPENCODE_CONFIG_CONTENT is a runtime override layered on top of
 # whatever config exists, so this agent exists whatever the user has set up.
-# `tools: {"*": false}` is the switch — opencode resolves it to permission
-# {"*": "deny"} — so every tool, built-in, MCP or from a plugin, present or
-# added later, is off. --pure skips external plugins on top of that.
+# `tools: {"*": false}` is the switch: every tool, built-in or from a plugin,
+# present or added later, is off. --pure skips external plugins on top of that,
+# and opencode_tools_off reads the resolved agent back before any text is sent,
+# because a config passed through the environment can be ignored without
+# anything saying so.
 OPENCODE_AGENT_CONFIG='{"agent":{"text-transform":{"mode":"primary","description":"transform text","tools":{"*":false}}}}'
 
 # Which harness Ori should be pointed at, in the order that gives the cleanest
@@ -295,14 +297,13 @@ build_command() {
     # The prompt goes in on stdin; `run` prints the reply and nothing else on
     # stdout, housekeeping like the model banner goes to stderr.
     #
-    # opencode checkpoints its session database (in $HOME/.local/share, and
-    # hundreds of megabytes once it has been used) when a run starts, and dies
+    # opencode checkpoints its session database when a run starts, and dies
     # with "Failed query: PRAGMA wal_checkpoint(PASSIVE)" if the kernel refuses
-    # the write. Its state lives outside the working directory, so the tight
-    # ulimit buys nothing here anyway: no file it would fill is one we read
-    # back. The stream caps and the timeout still apply.
-    FILE_LIMIT=unlimited
-    CMD=(env OPENCODE_CONFIG_CONTENT="$OPENCODE_AGENT_CONFIG"
+    # that write. Lifting the ulimit fixes it and costs the one bound the
+    # kernel enforces for every other agent, so instead the database goes to
+    # memory and never gets written at all. Nothing here wants a session kept:
+    # each run is one prompt in a directory that is thrown away after.
+    CMD=(env OPENCODE_CONFIG_CONTENT="$OPENCODE_AGENT_CONFIG" OPENCODE_DB=":memory:"
       opencode run --pure --agent text-transform)
     ;;
   pi)
@@ -354,7 +355,55 @@ agent_blocker() {
     ori_harness >/dev/null 2>&1 ||
       printf 'Ori needs Claude Code or Pi installed to transform text'
     ;;
+  opencode)
+    opencode_tools_off ||
+      printf 'OpenCode did not come back with every tool denied, so this plugin will not send your text to it'
+    ;;
   esac
+}
+
+# Ask opencode what the agent we just defined actually resolved to, and insist
+# on hearing that every tool is off.
+#
+# The config goes in through an environment variable, and every way that can
+# fail ends with the transform running anyway rather than not running. An
+# opencode that predates OPENCODE_CONFIG_CONTENT ignores it and never gets the
+# agent; `run --agent text-transform` then prints
+#
+#   ! agent "text-transform" not found. Falling back to default agent
+#
+# on stderr and carries on with the default agent, which has every tool on.
+# That is the shape the marketplace review blocked this plugin over: a
+# restriction that is asked for rather than confirmed. So the answer is read
+# back before any text is sent, and anything other than a parseable object with
+# nothing but false in it refuses the run.
+#
+# `debug agent` resolves the same config the run would use without contacting a
+# model or touching the working directory.
+opencode_tools_off() {
+  local tmp resolved
+  # Through a file rather than a pipe. opencode exits without waiting for its
+  # last write to drain, so on a pipe the answer arrives cut off at the pipe
+  # buffer: 64 KiB of a 108 KiB object, which is not parseable JSON. To a file
+  # it lands whole. That failure is silent and would make this check refuse
+  # every time, which is safe but would also mean opencode never runs.
+  tmp="$(mktemp "${TMPDIR:-/tmp}/text-transform-agent.XXXXXX")" || return 1
+  chmod 600 -- "$tmp" 2>/dev/null
+
+  env OPENCODE_CONFIG_CONTENT="$OPENCODE_AGENT_CONFIG" \
+    opencode debug agent text-transform >"$tmp" 2>/dev/null
+  resolved="$(head -c "$MAX_STREAM_BYTES" -- "$tmp")"
+  rm -f -- "$tmp"
+  [[ -n "$resolved" ]] || return 1
+
+  # Every value under .tools false, and at least one of them there: an empty
+  # object would otherwise pass a check that only looks for the absence of true.
+  printf '%s' "$resolved" | jq -e '
+    (.tools // empty) as $t
+    | ($t | type) == "object"
+    and ($t | length) > 0
+    and ([$t[] | select(. != false)] | length) == 0
+  ' >/dev/null 2>&1
 }
 
 # Said in the panel when the default agent is one this plugin refuses to drive.
