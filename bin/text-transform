@@ -644,8 +644,7 @@ read_answer() {
     read_bounded_file "$outfile" "$MAX_ANSWER_BYTES"
     ;;
   opencode)
-    printf '%s\n' "$stdout" |
-      jq -Rrj 'fromjson? | select(.type == "text") | .part.text // empty'
+    printf '%s' "$stdout"
     ;;
   omp)
     printf '%s\n' "$stdout" |

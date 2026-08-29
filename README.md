@@ -75,22 +75,38 @@ omarchy plugin enable jankeesvw.text-transform
 omarchy bar move jankeesvw.text-transform --section right
 ```
 
-The plugin registers both shortcuts while it is enabled:
+The plugin registers these shortcuts while it is enabled:
 
 ```text
 SUPER + SHIFT + T  Toggle Text Transform panel
 SUPER + SHIFT + V  Transform clipboard
+SUPER + ALT + V    Transform clipboard and paste
 ```
 
-The panel shortcut opens the panel normally. The clipboard shortcut reads the
-current text clipboard, applies the last transformation, and replaces the
-clipboard with the result. The panel stays closed and its input and output are
-untouched. The bar icon animates while it works; notifications are shown only
-when the clipboard has no text, the transform fails, or it finishes.
+These are global Hyprland bindings. Enabling the plugin unbinds any existing
+binding for these three combinations before installing its own. Disabling the
+plugin removes its bindings but does not restore previous ones, so choose
+combinations that are not used elsewhere.
 
-Copy and paste using whatever shortcuts the current application supports. This
-keeps the plugin independent of GUI, terminal, TUI, XWayland, and application-
-specific selection behavior.
+The panel shortcut opens the panel normally. The clipboard shortcut reads the
+current text clipboard, applies the last transformation, replaces the clipboard
+with the result, and opens the panel showing the source and result. If the panel
+was already open, those fields are updated when the result arrives. The bar icon
+animates while it works; notifications are shown only when the clipboard has no
+text, the transform fails, or it finishes.
+
+The paste shortcut does the same clipboard transform, then asks Omarchy's
+Universal paste behavior to paste the result into whichever destination is
+focused when the transform finishes. You can copy in one application and
+switch to another while the agent works. Omarchy chooses the appropriate paste
+shortcut for normal windows and terminal-tagged windows, so the plugin does not
+depend on the literal `SUPER + V` binding or on a particular application's
+selection behavior. The transformed text, not the original clipboard text, is
+pasted and remains on the clipboard as well.
+
+Copy the source text in the application as usual, or use Omarchy's Universal
+copy shortcut. The plugin reads the normal clipboard; it does not read the
+Wayland primary selection.
 
 ## Removing it
 

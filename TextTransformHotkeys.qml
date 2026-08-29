@@ -13,7 +13,10 @@ Item {
   readonly property string clipboardDescription: "Transform clipboard"
   readonly property string clipboardCommand:
     "omarchy-shell jankeesvw.text-transform transformClipboard"
-  readonly property string legacySelectionKeys: "SUPER + ALT + V"
+  readonly property string clipboardPasteKeys: "SUPER + ALT + V"
+  readonly property string clipboardPasteDescription: "Transform clipboard and paste"
+  readonly property string clipboardPasteCommand:
+    "omarchy-shell jankeesvw.text-transform transformClipboardAndPaste"
 
   function luaString(value) {
     return '"' + String(value)
@@ -28,23 +31,23 @@ Item {
       + root.luaString(command) + ")"
   }
 
-  function registerBindings(clearLegacy) {
+  function registerBindings() {
     // This service is loaded once even when the bar is shown on multiple monitors.
-    var code = (clearLegacy
-      ? "hl.unbind(" + root.luaString(root.legacySelectionKeys) + "); "
-      : "")
-      + root.bindCode(root.panelKeys, root.panelDescription, root.panelCommand) + "; "
-      + root.bindCode(root.clipboardKeys, root.clipboardDescription, root.clipboardCommand)
+    var code = root.bindCode(root.panelKeys, root.panelDescription, root.panelCommand) + "; "
+      + root.bindCode(root.clipboardKeys, root.clipboardDescription, root.clipboardCommand) + "; "
+      + root.bindCode(root.clipboardPasteKeys, root.clipboardPasteDescription,
+                      root.clipboardPasteCommand)
     Quickshell.execDetached(["hyprctl", "repl", code])
   }
 
   function unregisterBindings() {
     Quickshell.execDetached(["hyprctl", "repl",
       "hl.unbind(" + root.luaString(root.panelKeys) + "); hl.unbind("
-        + root.luaString(root.clipboardKeys) + ")"])
+        + root.luaString(root.clipboardKeys) + "); hl.unbind("
+        + root.luaString(root.clipboardPasteKeys) + ")"])
   }
 
-  Component.onCompleted: Qt.callLater(function() { root.registerBindings(true) })
+  Component.onCompleted: Qt.callLater(root.registerBindings)
   Component.onDestruction: root.unregisterBindings()
 
   // Dynamic bindings disappear when Hyprland reloads its Lua config.
@@ -53,7 +56,7 @@ Item {
 
     function onRawEvent(event) {
       if (!event || String(event.name || "") !== "configreloaded") return
-      Qt.callLater(function() { root.registerBindings(false) })
+      Qt.callLater(root.registerBindings)
     }
   }
 }

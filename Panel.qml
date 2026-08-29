@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Shapes
+import Quickshell
 import Quickshell.Io
 import qs.Commons
 import qs.Ui
@@ -74,8 +75,14 @@ Panel {
   // Set while a stop is on its way, so the empty answer that follows is read
   // as "you stopped it" rather than as a failure worth reporting.
   property bool cancelled: false
-  // A hotkey transform replaces the clipboard without touching panel state.
+  // A hotkey transform reads the clipboard instead of the panel input.
   property bool transformingClipboard: false
+  // Keep the source alongside a clipboard result so the panel can show both.
+  property string clipboardTransformInput: ""
+  // The second clipboard hotkey also asks Omarchy to paste the result into the
+  // surface that is focused when the transform finishes.
+  property bool pasteAfterClipboardTransform: false
+  property bool universalPastePending: false
 
   // Which agent is going to do the work, so the panel can name it and say so
   // when there is nothing to do the work with.
@@ -151,6 +158,7 @@ Panel {
       copied = false
     }
     cancelled = false
+    if (fromClipboard) clipboardTransformInput = text
     transformingClipboard = fromClipboard
     busy = true
     runProc.request = JSON.stringify({
@@ -163,16 +171,18 @@ Panel {
     runProc.running = true
   }
 
-  function transformClipboard() {
+  function requestClipboardTransform(pasteResult) {
     var chosen = bar && typeof bar.findPanelWidget === "function"
       ? bar.findPanelWidget(moduleName)
       : null
-    if (chosen && chosen !== root && typeof chosen.transformClipboard === "function") {
-      chosen.transformClipboard()
+    if (chosen && chosen !== root
+        && typeof chosen.requestClipboardTransform === "function") {
+      chosen.requestClipboardTransform(pasteResult)
       return
     }
 
-    if (busy || clipboardTransformProc.running) return
+    if (busy || clipboardTransformProc.running || universalPastePending
+        || universalPasteCopyProc.running) return
 
     if (!agentReady || !currentTransformation) {
       var problem = agentProblem !== "" ? agentProblem : "The default agent is not ready"
@@ -180,7 +190,16 @@ Panel {
       return
     }
 
+    pasteAfterClipboardTransform = pasteResult
     clipboardTransformProc.running = true
+  }
+
+  function transformClipboard() {
+    requestClipboardTransform(false)
+  }
+
+  function transformClipboardAndPaste() {
+    requestClipboardTransform(true)
   }
 
   function cancelTransform() {
@@ -257,6 +276,30 @@ Panel {
     copyProc.payload = text
     copyProc.stdinEnabled = true
     copyProc.running = true
+  }
+
+  function copyAndUniversalPaste(text) {
+    universalPastePending = true
+    universalPasteCopyProc.payload = text
+    universalPasteCopyProc.stdinEnabled = true
+    universalPasteCopyProc.running = true
+  }
+
+  // Reuse Omarchy's destination-aware paste behavior instead of sending the
+  // literal SUPER+V key. The latter would be delivered to the client by
+  // wtype, while Omarchy's Lua dispatcher can choose the terminal shortcut
+  // and send the key state to the currently focused surface.
+  function sendUniversalPaste() {
+    var code = "local window = hl.get_active_window(); local terminal = false; "
+      + "if window then for _, tag in ipairs(window.tags or {}) do "
+      + "if tag:gsub(\"%*$\", \"\") == \"terminal\" then terminal = true; break end "
+      + "end end; "
+      + "local mods = terminal and \"SHIFT\" or \"CTRL\"; "
+      + "local key = terminal and \"Insert\" or \"V\"; "
+      + "hl.dispatch(hl.dsp.send_key_state({ mods = mods, key = key, state = \"down\" })); "
+      + "hl.timer(function() hl.dispatch(hl.dsp.send_key_state({ mods = mods, "
+      + "key = key, state = \"up\" })) end, { timeout = 50, type = \"oneshot\" })"
+    Quickshell.execDetached(["hyprctl", "repl", code])
   }
 
   // Settings edit a copy, so abandoning them by closing the panel leaves the
@@ -411,10 +454,12 @@ Panel {
       waitForEnd: true
       onStreamFinished: {
         var clipboardRun = root.transformingClipboard
+        var pasteRun = clipboardRun && root.pasteAfterClipboardTransform
         root.busy = false
         if (root.cancelled) {
           root.cancelled = false
           root.transformingClipboard = false
+          root.pasteAfterClipboardTransform = false
           return
         }
         var payload
@@ -422,6 +467,7 @@ Panel {
           payload = JSON.parse(text)
         } catch (e) {
           root.transformingClipboard = false
+          root.pasteAfterClipboardTransform = false
           if (clipboardRun) root.notify("Text Transform failed", "Could not read the answer")
           else root.errorText = "Could not read the answer"
           return
@@ -430,10 +476,23 @@ Panel {
           if (clipboardRun) {
             var result = String(payload.output || "")
             root.transformingClipboard = false
+            root.pasteAfterClipboardTransform = false
             if (result === "") {
               root.notify("Text Transform failed", "The transformation returned no text")
+            } else if (pasteRun) {
+              // Paste the agent's output, not the clipboard snapshot that was
+              // used as its input.
+              root.copyAndUniversalPaste(result)
             } else {
-              root.copyText(result)
+              // The clipboard shortcut used to replace the clipboard while
+              // leaving the result invisible. Show the source and result in
+              // the panel as well as copying the result.
+              root.inputText = root.clipboardTransformInput
+              inputField.text = root.clipboardTransformInput
+              root.outputText = result
+              root.errorText = ""
+              root.copyOutput()
+              root.open()
               root.notify("Text Transform", "Transformed and copied to your clipboard")
             }
           } else {
@@ -452,6 +511,7 @@ Panel {
         } else {
           var problem = String((payload && payload.error) || "Something went wrong")
           root.transformingClipboard = false
+          root.pasteAfterClipboardTransform = false
 
           if (clipboardRun) {
             root.notify("Text Transform failed", problem)
@@ -473,6 +533,7 @@ Panel {
       root.busy = false
       root.cancelled = false
       root.transformingClipboard = false
+      root.pasteAfterClipboardTransform = false
     }
   }
 
@@ -517,8 +578,10 @@ Panel {
     command: ["wl-paste", "--no-newline", "--type", "text"]
     onStarted: handled = false
     onExited: function(exitCode) {
-      if (exitCode !== 0 && !handled)
+      if (exitCode !== 0 && !handled) {
+        root.pasteAfterClipboardTransform = false
         root.notify("Text Transform", "No text in clipboard")
+      }
     }
     stdout: StdioCollector {
       waitForEnd: true
@@ -526,6 +589,7 @@ Panel {
         clipboardTransformProc.handled = true
         var clipboard = String(text || "")
         if (clipboard.trim().length === 0) {
+          root.pasteAfterClipboardTransform = false
           root.notify("Text Transform", "No text in clipboard")
           return
         }
@@ -547,15 +611,51 @@ Panel {
     }
   }
 
+  // Keep the transformed text on the normal clipboard while the universal
+  // paste shortcut is sent after the same short handoff used by Omarchy.
+  Process {
+    id: universalPasteCopyProc
+    property string payload: ""
+    command: ["wl-copy"]
+    stdinEnabled: true
+    onStarted: {
+      write(payload)
+      payload = ""
+      stdinEnabled = false
+      universalPasteTimer.restart()
+    }
+    onExited: function(exitCode) {
+      if (exitCode !== 0 && root.universalPastePending) {
+        root.universalPastePending = false
+        universalPasteTimer.stop()
+        root.notify("Text Transform failed", "Could not prepare transformed text for pasting")
+      }
+    }
+  }
+
   Process { id: notifyProc }
 
-  // The five Panel would have registered, plus the two this panel adds.
+  Timer {
+    id: universalPasteTimer
+    interval: 150
+    repeat: false
+    onTriggered: {
+      if (!root.universalPastePending) return
+      root.universalPastePending = false
+      root.sendUniversalPaste()
+      root.notify("Text Transform", "Transformed and pasted")
+    }
+  }
+
+  // The five Panel would have registered, plus the three this panel adds.
   //
   //   omarchy-shell jankeesvw.text-transform paste
   //   omarchy-shell jankeesvw.text-transform transformClipboard
+  //   omarchy-shell jankeesvw.text-transform transformClipboardAndPaste
   //
   // `paste` opens on whatever is on the clipboard with the run button focused,
-  // while `transformClipboard` runs the last transformation in the background.
+  // while the two transform methods run the last transformation in the
+  // background, with the latter also pasting into the current destination.
   IpcHandler {
     target: root.ipcTarget
 
@@ -566,6 +666,7 @@ Panel {
     function toggle(): void { root.toggle() }
     function paste(): void { root.pasteAndArm() }
     function transformClipboard(): void { root.transformClipboard() }
+    function transformClipboardAndPaste(): void { root.transformClipboardAndPaste() }
   }
 
   ListModel { id: draft }
