@@ -79,6 +79,11 @@ Panel {
   property bool replacingSelection: false
   // wl-copy has to be ready before wtype sends the paste shortcut.
   property bool selectionClipboardReady: false
+  // Selection transforms never enter the panel's input/output state. This is
+  // held only long enough to offer the answer to the focused application.
+  property string selectionResult: ""
+  property bool selectionFromTerminal: false
+  property string selectionWindowAddress: ""
 
   // Which agent is going to do the work, so the panel can name it and say so
   // when there is nothing to do the work with.
@@ -148,9 +153,11 @@ Panel {
 
   function startTransform(text, replaceSelection) {
     if (busy) return
-    errorText = ""
-    outputText = ""
-    copied = false
+    if (!replaceSelection) {
+      errorText = ""
+      outputText = ""
+      copied = false
+    }
     cancelled = false
     replacingSelection = replaceSelection
     busy = true
@@ -176,8 +183,16 @@ Panel {
       return
     }
 
-    if (busy || selectionProc.running || replacingSelection
+    if (busy || selectionContextProc.running || replacementContextProc.running
+        || selectionProc.running || replacingSelection
         || selectionClipboardProc.running || selectionReplaceProc.running) return
+
+    // Selection transforms are for another application, never text highlighted
+    // inside this plugin's own panel.
+    if (opened) {
+      notifyNoSelection()
+      return
+    }
 
     if (!agentReady || !currentTransformation) {
       var problem = agentProblem !== "" ? agentProblem : "The default agent is not ready"
@@ -186,8 +201,11 @@ Panel {
       return
     }
 
-    errorText = ""
-    selectionProc.running = true
+    selectionContextProc.running = true
+  }
+
+  function notifyNoSelection() {
+    notify("Text Transform", "No text selected")
   }
 
   function cancelTransform() {
@@ -255,25 +273,63 @@ Panel {
 
   function copyOutput() {
     if (outputText === "") return
-    copyProc.payload = outputText
-    copyProc.stdinEnabled = true
-    copyProc.running = true
+    copyText(outputText)
     copied = true
     copiedTimer.restart()
   }
 
-  // Offer the result once for the replacement paste. Once the paste has been
-  // requested, the normal copy path runs again so the result remains on the
-  // clipboard for a later paste too.
-  function replaceSelectionOutput() {
-    if (outputText === "") {
+  function copyText(text) {
+    copyProc.payload = text
+    copyProc.stdinEnabled = true
+    copyProc.running = true
+  }
+
+  // Keep the offer alive until the replacement paste. --paste-once cannot be
+  // used here because Omarchy's clipboard watcher consumes that one request
+  // before the focused application gets it.
+  function replaceSelectionOutput(text) {
+    selectionResult = String(text || "")
+    if (selectionResult === "") {
       replacingSelection = false
       return
     }
     selectionClipboardReady = false
-    selectionClipboardProc.payload = outputText
+    selectionClipboardProc.payload = selectionResult
     selectionClipboardProc.stdinEnabled = true
     selectionClipboardProc.running = true
+  }
+
+  function finishSelectionTransform(text) {
+    var result = String(text || "")
+    if (result === "") {
+      replacingSelection = false
+      notify("Text Transform failed", "The transformation returned no text")
+      return
+    }
+
+    if (selectionFromTerminal) {
+      // A terminal selection is a range of rendered cells, not an editable
+      // range. Its text can be transformed, but only copied back for pasting.
+      replacingSelection = false
+      copyText(result)
+      notify("Text Transform", "Transformed and copied to your clipboard")
+      return
+    }
+
+    selectionResult = result
+    replacementContextProc.running = true
+  }
+
+  function finishSelectionForWindow(activeAddress) {
+    if (activeAddress !== "" && activeAddress === selectionWindowAddress) {
+      replaceSelectionOutput(selectionResult)
+      return
+    }
+
+    replacingSelection = false
+    copyText(selectionResult)
+    selectionResult = ""
+    notify("Text Transform", "Focus changed; transformed text copied to your clipboard")
   }
 
   // Settings edit a copy, so abandoning them by closing the panel leaves the
@@ -426,6 +482,7 @@ Panel {
     }
     stdout: StdioCollector {
       onStreamFinished: {
+        var selectionRun = root.replacingSelection
         root.busy = false
         if (root.cancelled) {
           root.cancelled = false
@@ -436,17 +493,17 @@ Panel {
         try {
           payload = JSON.parse(text)
         } catch (e) {
-          root.errorText = "Could not read the answer"
           root.replacingSelection = false
+          if (selectionRun) root.notify("Text Transform failed", "Could not read the answer")
+          else root.errorText = "Could not read the answer"
           return
         }
         if (payload && payload.ok === true) {
-          root.outputText = String(payload.output || "")
-          root.errorText = ""
-
-          if (root.replacingSelection) {
-            root.replaceSelectionOutput()
+          if (selectionRun) {
+            root.finishSelectionTransform(payload.output)
           } else {
+            root.errorText = ""
+            root.outputText = String(payload.output || "")
             // Straight onto the clipboard. Transforming text is a step on the
             // way to pasting it somewhere else, so making that a second click
             // only adds a click. The copy button stays for a second helping.
@@ -458,19 +515,23 @@ Panel {
             root.notify("Text Transform", "Transformed and copied to your clipboard")
           }
         } else {
-          root.errorText = String((payload && payload.error) || "Something went wrong")
+          var problem = String((payload && payload.error) || "Something went wrong")
           root.replacingSelection = false
 
-          // A failure with the panel open is already on screen in red, so
-          // only tell the people who walked away.
-          if (!root.opened) {
-            root.notify("Text Transform failed", "Open the panel to see what went wrong.")
+          if (selectionRun) {
+            root.notify("Text Transform failed", problem)
+          } else {
+            root.errorText = problem
+            // A failure with the panel open is already on screen in red, so
+            // only tell the people who walked away.
+            if (!root.opened)
+              root.notify("Text Transform failed", "Open the panel to see what went wrong.")
           }
         }
 
         // The run outlives the panel on purpose, so a result can arrive with
         // nobody looking, and the bar has to keep saying so until it is seen.
-        if (!root.opened) root.resultWaiting = true
+        if (!selectionRun && !root.opened) root.resultWaiting = true
       }
     }
     onExited: {
@@ -517,18 +578,77 @@ Panel {
   // The primary Wayland selection is the text that is currently highlighted,
   // rather than whatever was copied most recently.
   Process {
-    id: selectionProc
-    command: ["wl-paste", "--primary", "--no-newline"]
+    id: selectionContextProc
+    property bool handled: false
+    command: ["hyprctl", "activewindow", "-j"]
+    onStarted: {
+      handled = false
+      root.selectionFromTerminal = false
+      root.selectionWindowAddress = ""
+    }
+    onExited: function(exitCode) {
+      if (!handled) {
+        selectionProc.running = true
+      }
+    }
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
+        selectionContextProc.handled = true
+        var window = {}
+        try { window = JSON.parse(text) || {} } catch (e) {}
+        var tags = window.tags || []
+        root.selectionWindowAddress = String(window.address || "")
+        root.selectionFromTerminal = false
+        for (var i = 0; i < tags.length; i++) {
+          if (String(tags[i]).replace(/\*$/, "") === "terminal") {
+            root.selectionFromTerminal = true
+            break
+          }
+        }
+        selectionProc.running = true
+      }
+    }
+  }
+
+  Process {
+    id: replacementContextProc
+    property bool handled: false
+    command: ["hyprctl", "activewindow", "-j"]
+    onStarted: handled = false
+    onExited: function(exitCode) {
+      if (!handled) root.finishSelectionForWindow("")
+    }
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        replacementContextProc.handled = true
+        var window = {}
+        try { window = JSON.parse(text) || {} } catch (e) {}
+        root.finishSelectionForWindow(String(window.address || ""))
+      }
+    }
+  }
+
+  Process {
+    id: selectionProc
+    property bool handled: false
+    command: ["wl-paste", "--primary", "--no-newline"]
+    onStarted: handled = false
+    onExited: function(exitCode) {
+      // wl-paste exits nonzero when the primary selection has no owner, without
+      // emitting StdioCollector.onStreamFinished.
+      if (exitCode !== 0 && !handled) root.notifyNoSelection()
+    }
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        selectionProc.handled = true
         var selected = String(text || "")
         if (selected.trim().length === 0) {
-          root.errorText = "No text is selected"
-          root.notify("Text Transform", "No text selected")
+          root.notifyNoSelection()
           return
         }
-        root.notify("Text Transform", "Transforming selected text")
         root.startTransform(selected, true)
       }
     }
@@ -547,13 +667,12 @@ Panel {
     }
   }
 
-  // Keep this offer alive only until the injected paste requests it. The
-  // regular copy process below is started again after that request so the
-  // transformed text remains available for a later paste.
+  // Keep this offer alive until the injected paste completes. The regular copy
+  // process below is then started so the transformed text remains available.
   Process {
     id: selectionClipboardProc
     property string payload: ""
-    command: ["wl-copy", "--foreground", "--paste-once"]
+    command: ["wl-copy", "--foreground"]
     stdinEnabled: true
     onStarted: {
       write(payload)
@@ -566,7 +685,7 @@ Panel {
       root.selectionClipboardReady = false
       if (root.replacingSelection && !selectionReplaceProc.running) {
         root.replacingSelection = false
-        root.errorText = "Could not prepare the transformed text for pasting"
+        root.selectionResult = ""
         root.notify("Text Transform failed", "Could not replace the selected text")
       }
     }
@@ -576,20 +695,24 @@ Panel {
   // unlike typing the transformed text one key at a time.
   Process {
     id: selectionReplaceProc
-    command: ["wtype", "-M", "ctrl", "-k", "v", "-m", "ctrl"]
+    // Shift+Insert is the universal Omarchy paste chord: it works in terminals
+    // as well as ordinary text fields.
+    command: ["wtype", "-M", "shift", "-k", "Insert", "-m", "shift"]
     onExited: function(exitCode) {
       if (!root.replacingSelection) return
 
       root.replacingSelection = false
       if (exitCode === 0) {
-        // The one-shot offer has done its job. Reuse the normal copy path so
-        // the answer remains available on the clipboard after the replacement.
-        root.copyOutput()
+        // Replace the foreground offer with a normal clipboard owner so the
+        // transformed text remains available after the injected paste.
+        root.copyText(root.selectionResult)
+        root.selectionResult = ""
+        if (selectionClipboardProc.running) selectionClipboardProc.signal(15)
         root.notify("Text Transform", "Transformed and replaced the selected text")
       } else {
         if (selectionClipboardProc.running) selectionClipboardProc.signal(15)
-        root.errorText = "Could not replace the selected text"
-        root.notify("Text Transform failed", root.errorText)
+        root.selectionResult = ""
+        root.notify("Text Transform failed", "Could not replace the selected text")
       }
     }
   }
@@ -628,7 +751,7 @@ Panel {
   // paste shortcut to the application that still owns the selection.
   Timer {
     id: selectionPasteTimer
-    interval: 75
+    interval: 150
     repeat: false
     onTriggered: {
       if (root.selectionClipboardReady && !selectionReplaceProc.running)

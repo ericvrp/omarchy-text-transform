@@ -98,9 +98,19 @@ with the clipboard already in the input box and the run button focused, so it
 is one key to open and Enter to go.
 
 For the automatically registered selection shortcut, select text in another
-application and press the shortcut. The panel stays closed, the last
-transformation is used, and the result is pasted back so multiline text and
-special characters are preserved.
+application and press the shortcut. The panel stays closed and its input and
+output are untouched. The bar icon animates while the last transformation is
+running; notifications are shown only when no text is selected, the transform
+fails, or it finishes.
+
+In an ordinary editable application, the transformed text replaces the
+selection. Keep that window focused while the transform runs; if focus changes,
+the result is copied to the clipboard instead of being pasted into the wrong
+window. Mouse-aware terminal applications such as OpenCode do not expose their
+own internal highlights to Wayland. Use `Shift`+drag to make an exported terminal
+selection before pressing the shortcut. Terminal selections are rendered screen
+cells rather than editable ranges, so their transformed text is copied to the
+clipboard instead of being pasted into an unrelated input cursor.
 
 ## Removing it
 
