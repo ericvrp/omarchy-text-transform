@@ -632,7 +632,7 @@ Panel {
       if (!root.universalPastePending) return
       root.universalPastePending = false
       root.sendUniversalPaste()
-      root.notify("Text Transform", "Transformed and pasted")
+      root.notify("Text Transform", "Transformed, copied to clipboard, and pasted")
     }
   }
 
