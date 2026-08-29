@@ -41,7 +41,7 @@ TIMEOUT_SECONDS=180
 # they exist to stop a runaway rather than to enforce a style.
 MAX_REQUEST_BYTES=262144    # what the panel or a pipe may hand us
 MAX_STREAM_BYTES=1048576    # per agent stream, read back into a variable
-MAX_STREAM_KB=1024          # the same, as the ulimit -f the agent runs under
+MAX_STREAM_KB=1024          # the same, as the default ulimit -f the agent runs under
 MAX_ANSWER_BYTES=131072     # the transformed text we hand back
 MAX_CONFIG_BYTES=1048576    # the transformations file on disk
 
@@ -217,6 +217,14 @@ CODEX_NO_TOOLS=(
   -c tools.apps=false
 )
 
+# The agent opencode runs as, defined here rather than read from the user's
+# config: OPENCODE_CONFIG_CONTENT is a runtime override layered on top of
+# whatever config exists, so this agent exists whatever the user has set up.
+# `tools: {"*": false}` is the switch — opencode resolves it to permission
+# {"*": "deny"} — so every tool, built-in, MCP or from a plugin, present or
+# added later, is off. --pure skips external plugins on top of that.
+OPENCODE_AGENT_CONFIG='{"agent":{"text-transform":{"mode":"primary","description":"transform text","tools":{"*":false}}}}'
+
 # Which harness Ori should be pointed at, in the order that gives the cleanest
 # answer back. Ori is not an agent but a launcher that runs one of the others
 # against OpenRouter, so the harness decides the print mode.
@@ -241,6 +249,7 @@ ori_harness() {
 # of tool names up to date:
 #
 #   claude    --tools ""            allow-list, documented as "disable all tools"
+#   opencode  --agent text-transform  agent defined below, every tool denied
 #   pi        --no-tools            built-in and extension tools both
 #   omp       --no-tools            built-in tools
 #   ori       passes its arguments to claude or pi untouched, so it inherits
@@ -248,23 +257,28 @@ ori_harness() {
 #   copilot   --available-tools=""  "only these tools will be available"
 #
 # One switch each, so a tool added by an update is off without this list being
-# touched. Codex is the exception: it has no such switch, but it does expose
-# every tool-bearing feature as its own config key, and CODEX_NO_TOOLS turns
-# the lot off. That is a list rather than a switch, so it needs revisiting when
-# codex adds a feature, and the read-only sandbox sits under it as a second
-# layer for exactly that reason.
+# touched. OpenCode's switch is a config key rather than a flag, and it is
+# passed inline so it does not depend on the user's own config; see
+# OPENCODE_AGENT_CONFIG. Codex is the exception: it has no such switch, but it
+# does expose every tool-bearing feature as its own config key, and
+# CODEX_NO_TOOLS turns the lot off. That is a list rather than a switch, so it
+# needs revisiting when codex adds a feature, and the read-only sandbox sits
+# under it as a second layer for exactly that reason.
 #
-# Three agents Omarchy offers have neither, and they fail closed rather than
-# run with tools: opencode's `run` takes only an --agent profile out of the
-# user's own config, crush's `run` has no tool flag at all, and antigravity
-# has only a blanket --sandbox that restricts the terminal rather than
-# removing tools. See agent_refusal.
+# Two agents Omarchy offers have neither, and they fail closed rather than
+# run with tools: crush's `run` has no tool flag at all, and antigravity has
+# only a blanket --sandbox that restricts the terminal rather than removing
+# tools. See agent_refusal.
 #
 # $1 agent, $2 the full prompt, $3 the file codex is told to write its answer
 # to, because codex prints progress around the answer on stdout.
 build_command() {
   local agent="$1" prompt="$2" outfile="$3"
   USE_STDIN=1
+  # How big a file the agent may write, fed to `ulimit -f` by run_transform.
+  # One mebibyte bounds a runaway for everyone; the agents whose own state
+  # lives outside the working directory need more, and say so below.
+  FILE_LIMIT="$MAX_STREAM_KB"
   case "$agent" in
   claude)
     # --strict-mcp-config with no --mcp-config means no MCP servers get loaded,
@@ -276,6 +290,20 @@ build_command() {
   codex)
     CMD=(codex exec --sandbox read-only --skip-git-repo-check --color never
       -o "$outfile" "${CODEX_NO_TOOLS[@]}" -)
+    ;;
+  opencode)
+    # The prompt goes in on stdin; `run` prints the reply and nothing else on
+    # stdout, housekeeping like the model banner goes to stderr.
+    #
+    # opencode checkpoints its session database (in $HOME/.local/share, and
+    # hundreds of megabytes once it has been used) when a run starts, and dies
+    # with "Failed query: PRAGMA wal_checkpoint(PASSIVE)" if the kernel refuses
+    # the write. Its state lives outside the working directory, so the tight
+    # ulimit buys nothing here anyway: no file it would fill is one we read
+    # back. The stream caps and the timeout still apply.
+    FILE_LIMIT=unlimited
+    CMD=(env OPENCODE_CONFIG_CONTENT="$OPENCODE_AGENT_CONFIG"
+      opencode run --pure --agent text-transform)
     ;;
   pi)
     CMD=(pi -p --no-tools --no-session)
@@ -313,7 +341,7 @@ build_command() {
 # there and missing here would run with whatever tools it has.
 agent_supported() {
   case "$1" in
-  claude | codex | pi | omp | ori | grok | copilot) return 0 ;;
+  claude | codex | opencode | pi | omp | ori | grok | copilot) return 0 ;;
   *) return 1 ;;
   esac
 }
@@ -334,9 +362,8 @@ agent_blocker() {
 # this is a decision rather than a gap.
 agent_refusal() {
   case "$1" in
-  opencode) printf 'OpenCode has no flag to run without tools, so this plugin will not send your text to it' ;;
-  crush) printf 'Crush has no flag to run without tools, so this plugin will not send your text to it' ;;
   agy) printf 'Antigravity only offers a blanket sandbox, not a way to remove its tools, so this plugin will not send your text to it' ;;
+  crush) printf 'Crush has no flag to run without tools, so this plugin will not send your text to it' ;;
   *) printf 'This plugin does not know how to run %s without tools' "$(agent_label "$1")" ;;
   esac
 }
@@ -504,10 +531,10 @@ run_transform() {
   local outcap="$workdir/stdout.txt" agent_pid
   if [[ "$USE_STDIN" == "1" ]]; then
     printf '%s' "$prompt" |
-      (ulimit -f "$MAX_STREAM_KB"; cd "$workdir" && exec timeout -k 5 "$TIMEOUT_SECONDS" "${CMD[@]}") \
+      (ulimit -f "$FILE_LIMIT"; cd "$workdir" && exec timeout -k 5 "$TIMEOUT_SECONDS" "${CMD[@]}") \
       >"$outcap" 2>"$errfile" &
   else
-    (ulimit -f "$MAX_STREAM_KB"; cd "$workdir" && exec timeout -k 5 "$TIMEOUT_SECONDS" "${CMD[@]}" </dev/null) \
+    (ulimit -f "$FILE_LIMIT"; cd "$workdir" && exec timeout -k 5 "$TIMEOUT_SECONDS" "${CMD[@]}" </dev/null) \
       >"$outcap" 2>"$errfile" &
   fi
   agent_pid=$!
@@ -518,8 +545,8 @@ run_transform() {
   status=$?
   trap - TERM INT
 
-  # Bounded again on the way in. The ulimit already caps the files, but these
-  # two are what end up in shell variables and then in the JSON, and a second
+  # Bounded again on the way in. The ulimit usually already caps the files, but
+  # these two are what end up in shell variables and then in the JSON, and a second
   # cap costs nothing.
   stdout="$(read_bounded_file "$outcap" "$MAX_STREAM_BYTES")"
   stderr="$(read_bounded_file "$errfile" "$MAX_STREAM_BYTES")"

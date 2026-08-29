@@ -37,6 +37,7 @@ The text you transform is untrusted: it comes off a clipboard, and a language mo
 | Agent | Tools off with | Text goes in via |
 | --- | --- | --- |
 | Claude Code | `--tools ""` | stdin |
+| OpenCode | `--agent text-transform` against an inline config agent | stdin |
 | Codex | every tool-bearing feature off by config | stdin |
 | Pi | `--no-tools` | stdin |
 | Oh My Pi | `--no-tools` | stdin |
@@ -44,11 +45,11 @@ The text you transform is untrusted: it comes off a clipboard, and a language mo
 | Grok | `--tools ""` | argument |
 | GitHub Copilot | `--available-tools=""` | argument |
 
-Five of those are a single switch that means "no tools", so a tool added by an update is off without this plugin being changed. Codex is the exception: it has no such switch, and instead each of its tool-bearing features is turned off by name, with the read-only sandbox under it as a second layer. That list needs revisiting when Codex ships a new feature.
+Six of those are a single switch that means "no tools", so a tool added by an update is off without this plugin being changed. OpenCode's switch is a config key rather than a flag, passed inline through `OPENCODE_CONFIG_CONTENT` so it does not depend on your own config, and `--pure` skips external plugins on top of that. Codex is the exception: it has no such switch, and instead each of its tool-bearing features is turned off by name, with the read-only sandbox under it as a second layer. That list needs revisiting when Codex ships a new feature.
 
-**OpenCode, Crush and Antigravity are refused.** Not because they are worse, but because none of them can be told to run without tools from the command line: OpenCode's `run` only takes an `--agent` profile out of your own config, Crush's `run` has no tool flag, and Antigravity has a blanket `--sandbox` that restricts the terminal rather than removing tools. If one of those is your default agent, the panel says so and transforms nothing.
+**Crush and Antigravity are refused.** Not because they are worse, but because neither can be told to run without tools from the command line: Crush's `run` has no tool flag, and Antigravity has a blanket `--sandbox` that restricts the terminal rather than removing tools. If one of those is your default agent, the panel says so and transforms nothing.
 
-Grok and Copilot have no way to take a prompt on stdin, so with those two your text is briefly visible in the process list to other accounts on the machine. The other five never put it there. If that matters on your machine, pick one of the five.
+Grok and Copilot have no way to take a prompt on stdin, so with those two your text is briefly visible in the process list to other accounts on the machine. The other six never put it there. If that matters on your machine, pick one of the six.
 
 Ori is a launcher rather than an agent, so it needs Claude Code or Pi installed to have something to launch.
 
@@ -60,7 +61,7 @@ The text is handed to the agent as one prompt, and the agent is told to treat ev
 
 - The agent runs with no tools at all, and an agent that cannot be told that is refused rather than driven anyway. See *Supported agents*.
 - Every run happens in a fresh empty directory, so even if a tool did appear there is no project to read or write.
-- Everything is bounded in bytes as well as in time: what you send in, what the agent writes out, and what comes back. The agent runs under a file size limit the kernel enforces, so it cannot fill your disk on the way to being slow.
+- Everything is bounded in bytes as well as in time: what you send in, what the agent writes out, and what comes back. The agent runs under a file size limit the kernel enforces, so it cannot fill your disk on the way to being slow. OpenCode is the one exception: it checkpoints its session database when a run starts, and the limit kills that, so it runs without one — its output streams and the timeout still bound it.
 - The transformations file is opened without following symlinks and without blocking on anything that is not a regular file, so nothing planted at that path is read or written through.
 
 Text you paste is still sent to whatever service your agent talks to, and counted against your plan there. That is the trade: no key to configure, but also no local-only mode.
