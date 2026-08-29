@@ -77,8 +77,6 @@ Panel {
   property bool cancelled: false
   // A hotkey transform reads the clipboard instead of the panel input.
   property bool transformingClipboard: false
-  // Keep the source alongside a clipboard result so the panel can show both.
-  property string clipboardTransformInput: ""
   // The second clipboard hotkey also asks Omarchy to paste the result into the
   // surface that is focused when the transform finishes.
   property bool pasteAfterClipboardTransform: false
@@ -158,7 +156,6 @@ Panel {
       copied = false
     }
     cancelled = false
-    if (fromClipboard) clipboardTransformInput = text
     transformingClipboard = fromClipboard
     busy = true
     runProc.request = JSON.stringify({
@@ -484,16 +481,8 @@ Panel {
               // used as its input.
               root.copyAndUniversalPaste(result)
             } else {
-              // The clipboard shortcut used to replace the clipboard while
-              // leaving the result invisible. Show the source and result in
-              // the panel as well as copying the result.
-              root.inputText = root.clipboardTransformInput
-              inputField.text = root.clipboardTransformInput
-              root.outputText = result
-              root.errorText = ""
-              root.copyOutput()
-              root.open()
-              root.notify("Text Transform", "Transformed and copied to your clipboard")
+              root.copyText(result)
+              root.notify("Text Transform", "Clipboard replaced with transformed text")
             }
           } else {
             root.errorText = ""

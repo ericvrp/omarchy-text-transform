@@ -5,6 +5,8 @@ import Quickshell.Hyprland
 Item {
   id: root
 
+  readonly property string omarchyPath:
+    Quickshell.env("OMARCHY_PATH") || "/usr/share/omarchy"
   readonly property string panelKeys: "SUPER + SHIFT + T"
   readonly property string panelDescription: "Text Transform panel"
   readonly property string panelCommand:
@@ -40,6 +42,15 @@ Item {
     Quickshell.execDetached(["hyprctl", "repl", code])
   }
 
+  function notifyShortcuts() {
+    Quickshell.execDetached([root.omarchyPath + "/bin/omarchy-notification-send",
+      "-t", "10000",
+      "Text Transform shortcuts",
+      "SUPER + SHIFT + T  Toggle panel\n"
+        + "SUPER + SHIFT + V  Transform clipboard\n"
+        + "SUPER + ALT + V    Transform clipboard and paste"])
+  }
+
   function unregisterBindings() {
     Quickshell.execDetached(["hyprctl", "repl",
       "hl.unbind(" + root.luaString(root.panelKeys) + "); hl.unbind("
@@ -47,7 +58,10 @@ Item {
         + root.luaString(root.clipboardPasteKeys) + ")"])
   }
 
-  Component.onCompleted: Qt.callLater(root.registerBindings)
+  Component.onCompleted: Qt.callLater(function() {
+    root.registerBindings()
+    root.notifyShortcuts()
+  })
   Component.onDestruction: root.unregisterBindings()
 
   // Dynamic bindings disappear when Hyprland reloads its Lua config.

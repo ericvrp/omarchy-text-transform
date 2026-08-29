@@ -88,12 +88,14 @@ binding for these three combinations before installing its own. Disabling the
 plugin removes its bindings but does not restore previous ones, so choose
 combinations that are not used elsewhere.
 
+Enabling the plugin also shows a notification listing the three shortcuts.
+
 The panel shortcut opens the panel normally. The clipboard shortcut reads the
-current text clipboard, applies the last transformation, replaces the clipboard
-with the result, and opens the panel showing the source and result. If the panel
-was already open, those fields are updated when the result arrives. The bar icon
-animates while it works; notifications are shown only when the clipboard has no
-text, the transform fails, or it finishes.
+current text clipboard, applies the last transformation, and replaces the
+clipboard with the result. The panel stays closed; the notification says when
+the clipboard has been replaced. The bar icon animates while it works;
+transform notifications are shown only when the clipboard has no text, the
+transform fails, or it finishes.
 
 The paste shortcut does the same clipboard transform, then asks Omarchy's
 Universal paste behavior to paste the result into whichever destination is
